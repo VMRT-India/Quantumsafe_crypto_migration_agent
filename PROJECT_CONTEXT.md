@@ -452,11 +452,17 @@ Detailed JSON schemas for each are in `docs/contracts/`.
 
 ## 8. Dependency Graph (DAG)
 
+> **This DAG is a living document, not a permanent fixture.**
+> As implementation reveals better module boundaries, task splits, or merges,
+> update this section and record any architectural change in §15 (ADR Log).
+> Task IDs (T-01 … T-19) are stable references — if you renumber them, update
+> every reference in §9, §10, and §12 in the same commit.
+
 ```
 [Models/Utils]  ←  all modules depend on this (no dependencies itself)
      │
      ▼
-[LLM Client]    ←  no module dependencies (only env vars + IBM SDK)
+[LLM Client]    ←  no module dependencies (only env vars + OpenAI-compatible SDK)
      │
 [Ingestion]     ←  no module dependencies
      │
@@ -565,33 +571,64 @@ All devs: T-18 (migration integration tests), T-19 (end-to-end), demo polish, RE
 
 ### Branch structure
 
+There are exactly **5 long-lived branches**. No additional persistent branches.
+Feature work happens on personal branches; PRs merge back to `main`.
+
 ```
-main               — protected; merged into at phase milestones only
-  └─ develop       — integration branch; all feature branches merge here
-       ├─ feat/ingestion-analyzer       (Dev 1)
-       ├─ feat/llm-client-planner       (Dev 2)
-       ├─ feat/detector-classifier      (Dev 3)
-       ├─ feat/reporter-validator       (Dev 4)
-       ├─ feat/migrator-deterministic   (Dev 1, Phase 2)
-       ├─ feat/migrator-llm             (Dev 2, Phase 2)
-       └─ feat/cli-integration          (Dev 4, Phase 2)
+main                — protected; always demo-ready; final submission state
+  ├─ changes-Maruti   — Maruti's active development (repo owner / PR approver)
+  ├─ changes-Samik    — Samik's active development
+  ├─ changes-Navya    — Navya's active development
+  └─ changes-Palak    — Palak's active development
 ```
+
+**Each developer works only on their personal branch.**
+Short-lived `fix/` branches off a personal branch are fine and auto-deleted after merge.
+
+### Merge flow
+
+```
+changes-<name>  →  PR (reviewed by Maruti)  →  main
+```
+
+- Personal branches are rebased on `main` regularly to stay current.
+- PRs require at least **Maruti's approval** before merging to `main`.
+- `main` receives a merge commit (not squash) so individual author contributions are visible.
 
 ### Rules
 
-1. **`main` is always demo-ready.** Only merge from `develop` after phase milestone validation.
-2. **`develop` is always buildable.** Feature branches must pass CI before merging to `develop`.
-3. **Feature branches** are named `feat/<module>` or `fix/<issue>`.
-4. **No direct commits to `main` or `develop`** — use PRs with at least 1 review.
-5. **Pre-commit hooks** must pass on every commit (runs `ruff`, `detect-secrets`).
-6. **Never commit `.env`** — the security script `scripts/check_secrets.sh` enforces this.
-7. **Merge strategy:** squash-merge for feature → develop; merge commit for develop → main.
+1. **`main` is always demo-ready.** Every merge into `main` must leave it buildable and runnable.
+2. **Work on your own branch only.** Never commit to another developer's personal branch.
+3. **No direct commits to `main`** — use a PR from your personal branch.
+4. **Pre-commit hooks** must pass on every commit (`ruff`, `detect-secrets`).
+5. **Never commit `.env`** — run `./scripts/check_secrets.sh` before every push.
+6. **Commit message format is mandatory** — see `PROMPT.md §6` for the full convention.
+7. **Architecture/contract changes** must update `PROJECT_CONTEXT.md` in the same commit.
 
 ### Conflict prevention
 
-- Module boundaries map to separate directories — parallel work rarely touches the same file.
-- `models.py` is a shared file — coordinate changes via PR review.
+- Each developer owns a distinct set of modules (see §10) — parallel work rarely touches the same file.
+- `src/qsma/utils/models.py` is a shared contract file — any change requires a PR reviewed by all.
 - `pyproject.toml` dependencies — communicate additions in the team channel before adding.
+- Before starting work each session, rebase on latest `main`: `git fetch origin && git rebase origin/main`.
+
+### Architecture state per branch
+
+This table tracks what is **actually implemented** on each branch at any point in time.
+**Update this table in the same commit that implements the feature.**
+An AI agent reading this table knows exactly what exists on each branch without
+needing to inspect the code.
+
+| Branch | Modules implemented | Phase | Last updated |
+|---|---|---|---|
+| `main` | Phase 0 stubs: CLI stub, models.py, project structure | Phase 0 | 2024 Phase 0 |
+| `changes-Maruti` | (same as main — branch not yet diverged) | Phase 0 | — |
+| `changes-Samik` | (same as main — branch not yet diverged) | Phase 0 | — |
+| `changes-Navya` | (same as main — branch not yet diverged) | Phase 0 | — |
+| `changes-Palak` | (same as main — branch not yet diverged) | Phase 0 | — |
+
+> **Rule:** When you implement a module on your branch, update your row in this table
+> in the same commit. Format: `feat(ingestion): ... — updates §11 branch state table`.
 
 ---
 
@@ -694,12 +731,12 @@ A migration test passes only when:
 
 | Technology | Purpose | Decision rationale |
 |---|---|---|
-| **Python 3.11** | Primary language | Team familiarity; excellent crypto + AST libraries |
+| **Python 3.x** | Primary language | Team familiarity; excellent crypto + AST libraries |
 | **Click** | CLI framework | Mature, composable, well-tested |
 | **Rich** | Terminal output | Beautiful, zero-config tables/progress bars |
 | **libcst** | AST transformations | Lossless CST — preserves formatting/comments; unlike `ast` module which does not roundtrip |
 | **Pydantic v2** | Data models/contracts | Fast validation; typed interface enforcement between modules |
-| **ibm-watsonx-ai** | LLM integration | Required for IBM hackathon; Granite Code model is code-tuned |
+| **openai (Python SDK)** | LLM integration | OpenAI-compatible API — works with OpenAI, Anthropic gateways, watsonx.ai, and any compatible provider; switch provider via env vars only, no code change |
 | **python-dotenv** | Env var loading | Standard approach; never hardcodes credentials |
 | **pytest** | Test framework | Standard; integrates with coverage |
 | **ruff** | Linting + formatting | Fast; replaces flake8 + isort + black |
@@ -713,16 +750,45 @@ comments and formatting). `libcst` operates on a Concrete Syntax Tree that prese
 all whitespace, comments, and formatting, making it suitable for automated code
 transformation tools that must produce readable, PR-mergeable output.
 
-### IBM watsonx.ai usage
+### LLM provider — OpenAI-compatible interface
 
-Used for:
-1. LLM-assisted migration planning (complex patterns)
-2. Natural-language explanation generation (classifier enrichment)
+The LLM client (`src/qsma/llm/client.py`) uses the **OpenAI Chat Completions API**.
+This is a de-facto standard implemented by:
+
+| Provider | `LLM_BASE_URL` | Example `LLM_MODEL` |
+|---|---|---|
+| OpenAI | *(leave blank)* | `gpt-4o` |
+| Anthropic (via gateway) | provider-specific | `claude-3-5-sonnet-20241022` |
+| IBM watsonx.ai | `https://<region>.ml.cloud.ibm.com/ml/v1/text/chat` | `ibm/granite-34b-code-instruct` |
+| Local / Ollama | `http://localhost:11434/v1` | `codellama` |
+
+**Switching provider = changing `.env` only. Zero code change.**
+
+The LLM is used **only** in:
+1. Planner — generating migration strategies for complex/ambiguous patterns
+2. Migrator — LLM-assisted transformation when deterministic rules are insufficient
 
 NOT used for:
-- Detection (deterministic — accuracy must be 100%)
-- Risk classification (deterministic — based on fixed NIST guidance)
+- Detection (deterministic — must be 100% reproducible)
+- Risk classification (deterministic — based on fixed NIST risk table)
 - Validation (deterministic — syntax check + test execution)
+
+### Data storage and caching
+
+**This tool is stateless by default.** No database. No persistent state between runs.
+
+| Mechanism | Purpose | Location | Phase |
+|---|---|---|---|
+| **JSON scan cache** | Skip re-scanning unchanged files | `.qsma_cache/<sha256-hash>.json` | Phase 1 |
+| **In-process registry** | `dict[finding_id → CryptoFinding]` within a single CLI invocation | `src/qsma/utils/registry.py` | Phase 1 |
+| **No database** | No SQLite, PostgreSQL, Redis — out of MVP scope | — | Out of scope |
+| **No inter-run persistent state** | Fresh scan each run unless `--cache` flag passed | — | Phase 1 flag |
+
+**Cache design:**
+- Cache key: `sha256(sorted list of (absolute_file_path, file_mtime_ns))` for the scanned tree
+- A single changed file invalidates only that file's findings, not the whole scan
+- Cache is stored locally in `.qsma_cache/` (excluded from git via `.gitignore`)
+- Cache format: `ScanReport` serialized to JSON via `model.model_dump_json()`
 
 ---
 

@@ -115,3 +115,6 @@ reports/
 # =============================================================================
 tests/fixtures/real_*
 tests/samples/real_*
+
+# qsma scan cache — generated at runtime, never committed
+.qsma_cache/
