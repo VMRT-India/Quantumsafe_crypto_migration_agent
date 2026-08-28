@@ -19,10 +19,9 @@ dependencies = [
     "libcst>=1.1",         # concrete syntax tree — lossless Python AST transforms
     "tree-sitter>=0.21",   # multi-language parsing (future extension)
 
-    # LLM integration — OpenAI-compatible Chat Completions API
-    # Works with OpenAI, Anthropic (via gateway), IBM watsonx.ai, Ollama, etc.
-    # Switch provider by changing LLM_BASE_URL + LLM_MODEL in .env — no code change.
-    "openai>=1.30",
+    # LLM integration — IBM watsonx.ai is the DEFAULT provider
+    # Switch provider via LLM_PROVIDER in .env — no code change required.
+    "ibm-watsonx-ai>=1.0",
 
     # Configuration / environment
     "python-dotenv>=1.0",
@@ -34,6 +33,20 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Optional LLM provider SDKs — install only what you need
+# pip install 'qsma[llm-openai]'      → OpenAI-compatible endpoint support
+# pip install 'qsma[llm-anthropic]'   → Anthropic-compatible endpoint support
+# pip install 'qsma[llm-all]'         → all LLM providers
+llm-openai = [
+    "openai>=1.30",        # any OpenAI-compatible endpoint
+]
+llm-anthropic = [
+    "anthropic>=0.25",     # any Anthropic-compatible endpoint
+]
+llm-all = [
+    "openai>=1.30",
+    "anthropic>=0.25",
+]
 dev = [
     "pytest>=7.4",
     "pytest-cov>=4.1",

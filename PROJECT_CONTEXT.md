@@ -736,7 +736,9 @@ A migration test passes only when:
 | **Rich** | Terminal output | Beautiful, zero-config tables/progress bars |
 | **libcst** | AST transformations | Lossless CST — preserves formatting/comments; unlike `ast` module which does not roundtrip |
 | **Pydantic v2** | Data models/contracts | Fast validation; typed interface enforcement between modules |
-| **openai (Python SDK)** | LLM integration | OpenAI-compatible API — works with OpenAI, Anthropic gateways, watsonx.ai, and any compatible provider; switch provider via env vars only, no code change |
+| **ibm-watsonx-ai** | LLM integration (default) | Primary/default provider for IBM hackathon; Granite Code model; `LLM_PROVIDER=watsonx` |
+| **openai** *(optional extra)* | LLM integration (optional) | `pip install 'qsma[llm-openai]'`; any OpenAI-compatible endpoint; `LLM_PROVIDER=openai_compatible` |
+| **anthropic** *(optional extra)* | LLM integration (optional) | `pip install 'qsma[llm-anthropic]'`; any Anthropic-compatible endpoint; `LLM_PROVIDER=anthropic_compatible` |
 | **python-dotenv** | Env var loading | Standard approach; never hardcodes credentials |
 | **pytest** | Test framework | Standard; integrates with coverage |
 | **ruff** | Linting + formatting | Fast; replaces flake8 + isort + black |
@@ -750,19 +752,22 @@ comments and formatting). `libcst` operates on a Concrete Syntax Tree that prese
 all whitespace, comments, and formatting, making it suitable for automated code
 transformation tools that must produce readable, PR-mergeable output.
 
-### LLM provider — OpenAI-compatible interface
+### LLM provider architecture
 
-The LLM client (`src/qsma/llm/client.py`) uses the **OpenAI Chat Completions API**.
-This is a de-facto standard implemented by:
+**Default:** IBM watsonx.ai (`ibm-watsonx-ai` SDK, installed with the base package).
+**Optional extras:** OpenAI-compatible and Anthropic-compatible providers.
 
-| Provider | `LLM_BASE_URL` | Example `LLM_MODEL` |
-|---|---|---|
-| OpenAI | *(leave blank)* | `gpt-4o` |
-| Anthropic (via gateway) | provider-specific | `claude-3-5-sonnet-20241022` |
-| IBM watsonx.ai | `https://<region>.ml.cloud.ibm.com/ml/v1/text/chat` | `ibm/granite-34b-code-instruct` |
-| Local / Ollama | `http://localhost:11434/v1` | `codellama` |
+| `LLM_PROVIDER` value | SDK used | Install | Credentials |
+|---|---|---|---|
+| `watsonx` *(default)* | `ibm-watsonx-ai` | included in base | `WATSONX_API_KEY`, `WATSONX_PROJECT_ID`, `WATSONX_URL` |
+| `openai_compatible` | `openai` | `pip install 'qsma[llm-openai]'` | `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` |
+| `anthropic_compatible` | `anthropic` | `pip install 'qsma[llm-anthropic]'` | `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` |
 
-**Switching provider = changing `.env` only. Zero code change.**
+**Switching provider = change `LLM_PROVIDER` (+ matching credentials) in `.env`. Zero code change.**
+
+The `openai_compatible` and `anthropic_compatible` values accept **any endpoint that
+implements those APIs** — not necessarily OpenAI or Anthropic specifically.
+This includes self-hosted models, corporate gateways, and other compatible services.
 
 The LLM is used **only** in:
 1. Planner — generating migration strategies for complex/ambiguous patterns

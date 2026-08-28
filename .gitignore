@@ -118,3 +118,8 @@ tests/samples/real_*
 
 # qsma scan cache — generated at runtime, never committed
 .qsma_cache/
+
+# session_screenshots/ — MUST be committed (required for hackathon submission)
+# Explicitly un-ignore images inside this folder even if a broader rule catches them.
+!session_screenshots/
+!session_screenshots/**
