@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "qsma"
+version = "0.1.0"
+description = "Quantum-Safe Crypto Migration Agent — IBM Dev Day Hackathon"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+
+dependencies = [
+    # CLI framework
+    "click>=8.1",
+    "rich>=13.0",          # terminal output formatting
+
+    # AST / static analysis
+    "libcst>=1.1",         # concrete syntax tree — lossless Python AST transforms
+    "tree-sitter>=0.21",   # multi-language parsing (future extension)
+
+    # IBM watsonx.ai SDK
+    "ibm-watsonx-ai>=1.0",
+
+    # Configuration / environment
+    "python-dotenv>=1.0",
+    "pydantic>=2.5",       # data models and contract validation
+
+    # Utility
+    "typing-extensions>=4.9",
+    "pathspec>=0.12",      # .gitignore-style path matching for codebase ingestion
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+    "pytest-mock>=3.12",
+    "ruff>=0.3",
+    "mypy>=1.8",
+    "pre-commit>=3.6",
+]
+
+[project.scripts]
+qsma = "qsma.cli.main:cli"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=qsma --cov-report=term-missing"

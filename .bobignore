@@ -1,0 +1,46 @@
+# =============================================================================
+# IBM Dev Day Hackathon — Bob AI Security Ignore Patterns
+# DO NOT REMOVE OR MODIFY THE SECTIONS MARKED [IBM-SECURITY]
+# Prevents Bob AI from reading sensitive files into its context window.
+# =============================================================================
+
+# [IBM-SECURITY] Real credential files — never read by AI
+.env
+.env.*
+*.env
+secrets/
+credentials/
+*_credentials.json
+ibm_credentials.env
+service_credentials.json
+vcap_services.json
+ibmcloud_api_key
+
+# [IBM-SECURITY] Files that may contain embedded secrets
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+
+# Build / binary artefacts
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+node_modules/
+build/
+dist/
+*.egg-info/
+htmlcov/
+
+# Large generated output — too large to be useful in AI context
+output/
+reports/
+logs/
+
+# IDE project files
+.idea/
+.vscode/

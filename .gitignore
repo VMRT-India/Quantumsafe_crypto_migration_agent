@@ -1,0 +1,117 @@
+# =============================================================================
+# IBM Dev Day Hackathon — Security-Required Patterns
+# DO NOT REMOVE OR MODIFY THE SECTIONS MARKED [IBM-SECURITY]
+# =============================================================================
+
+# [IBM-SECURITY] Environment and credentials — NEVER committed
+.env
+.env.*
+!.env.example
+*.env
+secrets/
+credentials/
+*_credentials.json
+ibm_credentials.env
+
+# [IBM-SECURITY] API keys and tokens — common naming patterns
+*api_key*
+*apikey*
+*api-key*
+*_secret*
+*password*
+*passwd*
+*token*
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+
+# [IBM-SECURITY] IBM service credential files
+ibmcloud_api_key
+service_credentials.json
+vcap_services.json
+
+# =============================================================================
+# Python
+# =============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+
+# pytest / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+htmlcov/
+.tox/
+.nox/
+
+# mypy / pyright / ruff
+.mypy_cache/
+.pytype/
+.pyre/
+.ruff_cache/
+
+# =============================================================================
+# Node / JavaScript (tooling scripts)
+# =============================================================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+.npm
+
+# =============================================================================
+# IDE and OS
+# =============================================================================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# =============================================================================
+# Build / output artefacts
+# =============================================================================
+*.log
+logs/
+output/
+reports/
+*.tmp
+*.bak
+
+# =============================================================================
+# Test fixtures containing sensitive data
+# =============================================================================
+tests/fixtures/real_*
+tests/samples/real_*
