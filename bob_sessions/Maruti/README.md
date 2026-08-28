@@ -4,8 +4,8 @@
 **GitHub:** `vmrt-india`
 **Role:** Repo owner / PR approver
 
-Drop all Bob session screenshots from your development work into this folder,
-**on the `changes-Maruti` branch first**, then open a PR to merge into `main`.
+Add your Bob session screenshots to **this folder** on the `changes-Maruti` branch.
+Then open a PR → `main` so your screenshots appear in the shared project history.
 
 Naming convention: `YYYY-MM-DD_HH-MM_<description>.png`
 
