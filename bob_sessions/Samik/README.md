@@ -1,8 +1,9 @@
-# Samik — Session Screenshots
+# Samik — Bob Session Screenshots
 
 **Branch:** `changes-Samik`
 
-Drop all session screenshots from your development work into this folder.
+Drop all Bob session screenshots from your development work into this folder,
+**on the `changes-Samik` branch first**, then open a PR to merge into `main`.
 
 Naming convention: `YYYY-MM-DD_HH-MM_<description>.png`
 
