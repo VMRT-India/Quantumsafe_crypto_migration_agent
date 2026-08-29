@@ -234,26 +234,6 @@ class ValidationResult(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Orchestration & Session models
-# ---------------------------------------------------------------------------
-
-
-class MigrationSessionState(BaseModel):
-    session_id: str
-    target_path: Path
-    findings: list[CryptoFinding] = Field(default_factory=list)
-    selected_finding_ids: list[str] = Field(default_factory=list)
-    current_finding_id: str | None = None
-    current_attempt: int = 0
-    max_attempts: int = 3
-    migration_plans: list[MigrationPlan] = Field(default_factory=list)
-    transformation_results: list[TransformationResult] = Field(default_factory=list)
-    validation_results: list[ValidationResult] = Field(default_factory=list)
-    retry_hints: str | None = None
-    is_dry_run: bool = False
-
-
-# ---------------------------------------------------------------------------
 # Reporting models
 # ---------------------------------------------------------------------------
 

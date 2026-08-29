@@ -4,12 +4,12 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from qsma.llm.client import LLMClient  # Assumed centralized wrapper
+from qsma.llm.client import LLMClient
 from qsma.utils.models import (
-    MigrationSessionState,
     MigrationStatus,
     ValidationResult,
 )
+from qsma.validator.state import ValidatorState
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,7 @@ def generate_retry_hints(llm_client: LLMClient, error_output: str, original_snip
         return "Validation failed. Review the error log and ensure PQC library APIs are used correctly."
 
 
-def validator_node(state: MigrationSessionState) -> dict[str, Any]:
+def validator_node(state: ValidatorState) -> dict[str, Any]:
     """
     LangGraph node: Validates the most recent transformation.
     Returns state updates for LangGraph to route (pass, retry, or escalate).
