@@ -261,12 +261,13 @@ The LLM client (`src/qsma/llm/client.py`) is **provider-agnostic**. Default is I
 
 See `.env.example` for all variables. See `src/qsma/llm/client.py` for the implementation.
 
-The LLM is used in **all three migration agents** (Planner, Migrator, Validator — all LangGraph nodes):
+The LLM is used in:
 - **Planner** — reasons about migration strategy; produces `MigrationPlan`
 - **Migrator** — generates transformed code from the original snippet + plan
 - **Validator** — interprets test/syntax failures; produces `retry_hints` for Migrator
+- **Classifier** (`migration_risk_score` only) — LLM assesses blast-radius + complexity to score migration difficulty; falls back to rule-based heuristic if unavailable (see ADR-011)
 
-The LLM is **not** used in: Ingestion, Analyzer, Detector, Classifier — these are fully deterministic.
+The LLM is **not** used in: Ingestion, Analyzer, Detector, Classifier **algorithm volatility score** — these are fully deterministic.
 
 ---
 
@@ -310,6 +311,10 @@ A changed file invalidates only that file's findings, not the entire scan.
 | Full module specs, DAG, parallelization plan? | `PROJECT_CONTEXT.md §4–9` |
 | What does module X do? | `PROJECT_CONTEXT.md §6.X` |
 | What data does module X produce/consume? | `PROJECT_CONTEXT.md §7` + `src/qsma/utils/models.py` |
+| What is the dependency graph and why? | `PROJECT_CONTEXT.md §6.3` + ADR-010 |
+| What are the two risk scores in CryptoFinding? | `PROJECT_CONTEXT.md §6.4` + ADR-011 |
+| What is blast_radius? | `DependencyGraph.blast_radius()` in `src/qsma/utils/models.py`; used by Classifier |
+| What is the Advisor / qsma chat? | `PROJECT_CONTEXT.md §6.10` + ADR-012 |
 | What task to work on? | `PROJECT_CONTEXT.md §17` |
 | What ADRs constrain me? | `PROJECT_CONTEXT.md §14` |
 | Which branch is mine? | `PROJECT_CONTEXT.md §10` |
@@ -322,6 +327,10 @@ A changed file invalidates only that file's findings, not the entire scan.
 | Is there caching? | Redis (session) + JSON scan cache — see `PROMPT.md §9` |
 | What is the migration strategy for all findings? | LLM-agentic (Planner→Migrator→Validator); no deterministic rewrite — see ADR-002 |
 | Can I add a rule-based transform path to Migrator? | No — see ADR-002 and ADR-003 |
+| Can I make algorithm_risk_score call the LLM? | No — see ADR-011. That score must remain deterministic. |
+| Can I skip Neo4j and use in-memory only? | Yes — Detector falls back automatically if `NEO4J_URI` is unset |
+| Does the advisor persist conversation history? | No — in-memory only per session. See ADR-012. |
+| Can I skip the advisor and migrate directly? | Yes — `qsma migrate --auto` or `--finding-id` bypasses it entirely |
 | Where do session screenshots go? | `bob_sessions/<YourName>/` — see `PROMPT.md §4` |
 
 ---

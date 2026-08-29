@@ -48,10 +48,11 @@ validates that the migration did not break the application.
 ### End-to-end workflow
 
 ```
-qsma scan <path>      →  Analyse codebase, detect crypto, classify risk, display findings
-qsma report <path>    →  Format and display / export a structured findings report
-qsma migrate <path>   →  Interactively select findings and apply automated migration
+qsma scan <path>      →  Analyse codebase, detect crypto, classify risk (dual scores)
+qsma chat <path>      →  Talk to the AI advisor about findings in natural language ★ NEW ★
+qsma migrate <path>   →  Apply migrations for confirmed finding IDs (or --auto)
 qsma validate <path>  →  Post-migration: build, test, and report regression status
+qsma report <path>    →  Format and display / export a structured findings report
 ```
 
 ---
@@ -168,13 +169,13 @@ cryptography has been migrated and validated" in a single automated workflow.
 
 ### LLM integration point
 
-The LLM (watsonx.ai / Granite Code) is used **only** in:
+The LLM (watsonx.ai / Granite Code) is used in:
 1. **Planner agent** — LangGraph node: reasons about migration strategy; multi-step for complex/unknown patterns
 2. **Migrator agent** — LangGraph node: applies transformation; iterates if Validator reports failure
 3. **Validator agent** — LangGraph node: interprets test failures; signals retry to Migrator or escalates to manual
-4. **Classifier** — optional enrichment of explanation text (can be disabled)
+4. **Classifier** — optional `migration_risk_score` estimation (LLM assesses blast-radius + usage complexity; falls back to rule-based heuristic if unavailable — see ADR-011)
 
-The LLM is **not** used for detection or risk classification — these are deterministic.
+The LLM is **not** used for crypto detection or the algorithm volatility risk table — those are fully deterministic.
 
 ### Agentic loop (Planner → Migrator → Validator)
 
@@ -219,18 +220,19 @@ list[CryptoFinding]
 
 | Module | Package | Responsibility |
 |---|---|---|
-| CLI | `qsma.cli` | Command routing, user interaction, progress display; `--resume` flag |
+| CLI | `qsma.cli` | Command routing, user interaction, progress display; `--resume` flag; `chat` command entry point |
 | Ingestion | `qsma.ingestion` | Filesystem walk, file filtering, raw source collection |
 | Analyzer | `qsma.analyzer` | Multi-language AST parsing via tree-sitter (all languages) + libcst for Python structural analysis |
-| Detector | `qsma.detector` | Pattern matching on tree-sitter AST nodes to find crypto usage across languages |
-| Classifier | `qsma.classifier` | Risk scoring, algorithm identification, recommendation |
-| Planner | `qsma.planner` | **LangGraph agent node** — migration strategy reasoning per finding |
-| Migrator | `qsma.migrator` | **LangGraph agent node** — code transformation (libcst deterministic + LLM-assisted) |
+| Detector | `qsma.detector` | Pattern matching on tree-sitter AST nodes to find crypto usage; **builds intra-codebase `DependencyGraph`** and persists to Neo4j |
+| Classifier | `qsma.classifier` | Dual risk scoring: **algorithm volatility** (deterministic NIST table) + **migration complexity** (LLM-assisted, uses blast radius from `DependencyGraph`) |
+| **Advisor** | **`qsma.advisor`** | **NEW — LLM-backed conversational CLI agent.** Receives scan results; user interacts in natural language to explore findings, ask blast-radius questions, and confirm a finding selection. Returns `list[finding_id]` to trigger migration. See ADR-012. |
+| Planner | `qsma.planner` | **LangGraph agent node** — migration strategy reasoning per finding; queries Neo4j for dependency order |
+| Migrator | `qsma.migrator` | **LangGraph agent node** — fully LLM-driven code transformation; libcst splices result |
 | Validator | `qsma.validator` | **LangGraph agent node** — post-migration build/test validation; feeds back to Migrator on failure |
 | Reporter | `qsma.reporter` | Output formatting (terminal, JSON, Markdown) |
 | LLM Client | `qsma.llm` | watsonx.ai SDK wrapper, prompt templates, few-shot training data loader |
 | Session | `qsma.utils.session` | Redis-backed session state manager; serialize/resume `MigrationSessionState` |
-| Models | `qsma.utils.models` | Shared Pydantic data-models (contracts) including `MigrationSessionState` |
+| Models | `qsma.utils.models` | Shared Pydantic data-models (contracts) including `MigrationSessionState`, `DependencyGraph`, `CryptoHit` |
 
 ---
 
@@ -304,15 +306,25 @@ AnalysisResult — list[ParsedFile], import_index
 
 ### 6.3 Detector (`qsma.detector`)
 
-**Purpose:** Identify concrete cryptographic usage sites from the analysis result.
+**Purpose:** Identify concrete cryptographic usage sites from the analysis result, and build a full intra-codebase dependency graph that maps which modules depend on each crypto-bearing module.
 
 **Inputs:** `AnalysisResult`
-**Outputs:** `list[CryptoHit]`
+**Outputs:** `list[CryptoHit]`, `DependencyGraph`
 
 **Responsibilities:**
-- Apply a rule-based pattern library against AST nodes
+
+*Phase A — Pattern matching (existing):*
+- Apply a rule-based pattern library against tree-sitter AST nodes
 - Distinguish: importing a crypto library vs. actually invoking a crypto operation
 - Extract: algorithm, key_size (where present), usage_type, code location
+- Tag each `CryptoHit` with the `dependency_node_id` of its containing module
+
+*Phase B — Dependency graph construction (new):*
+- Walk every `ParsedFile` in the `AnalysisResult` import map to build a directed graph of module-level dependencies
+- For each node, compute `direct_dependents` (one hop) and `transitive_dependents` (full BFS/DFS traversal) — i.e. "if I change this module, which other modules are affected?"
+- Persist the graph to **Neo4j** (`NEO4J_URI` env var) for durable storage and Planner-time querying
+- Also return the full in-memory `DependencyGraph` object so the Classifier can use `blast_radius()` immediately without a DB round-trip
+- Mark `DependencyNode.has_crypto = True` for every node that contains ≥1 `CryptoHit`
 
 **Detection strategy:**
 - Pattern library: `src/qsma/detector/patterns/` — one file per algorithm family
@@ -320,41 +332,65 @@ AnalysisResult — list[ParsedFile], import_index
 
 **Key classes:**
 ```
-DetectionRule  — rule_id, algorithm_hint, usage_type, matcher_fn
-CryptoHit      — rule_id, algorithm_hint, usage_type, location, raw_node_info
+DetectionRule   — rule_id, algorithm_hint, usage_type, matcher_fn
+CryptoHit       — rule_id, algorithm_hint, usage_type, location, raw_node_info, dependency_node_id
+DependencyNode  — node_id, module_name, file, language, has_crypto,
+                  direct_dependents, transitive_dependents
+DependencyGraph — session_id, nodes, edges, blast_radius(node_id) → int
 ```
+
+**Neo4j schema:**
+- Node label `Module`: properties `node_id`, `module_name`, `file`, `language`, `has_crypto`
+- Relationship `IMPORTS_FROM`: `(Module)-[:IMPORTS_FROM]->(Module)`
+- Relationship `CALLS`: `(Module)-[:CALLS]->(Module)` (where resolvable)
+- All nodes for a scan are tagged with `session_id` for isolation
 
 **Not responsible for:** Risk scoring — that is the Classifier's job.
 
-**Depends on:** Analyzer (AnalysisResult)
+**Depends on:** Analyzer (AnalysisResult), Neo4j (runtime, optional — falls back to in-memory only)
 
 ---
 
 ### 6.4 Classifier (`qsma.classifier`)
 
-**Purpose:** Assign quantum risk, severity, explanation, and recommendation to each hit.
+**Purpose:** Assign two independent risk scores, quantum risk level, explanation, and recommendation to each `CryptoHit`. Outputs `CryptoFinding` objects with full blast-radius context.
 
-**Inputs:** `list[CryptoHit]`
+**Inputs:** `list[CryptoHit]`, `DependencyGraph`
 **Outputs:** `list[CryptoFinding]`
 
 **Responsibilities:**
-- Map detected algorithms to `QuantumRisk` level using a risk table
-- Assign `severity_score` (0–10)
-- Generate human-readable `explanation` (deterministic template + optional LLM enrichment)
-- Generate `recommendation` (deterministic — points to NIST PQC alternative)
 
-**Risk table (deterministic — do not change without ADR):**
-| Algorithm | Risk | Reason |
-|---|---|---|
-| RSA (any key size) | CRITICAL | Shor's algorithm breaks integer factoring |
-| ECDSA, ECDH, DSA, DH | CRITICAL | Shor's algorithm breaks discrete log |
-| AES-128 | HIGH | Grover halves effective key strength to ~64 bits |
-| DES, 3DES | CRITICAL | Classically weak + quantum-reduced further |
-| MD5, SHA-1 | HIGH | Collision-broken classically; further weakened |
-| AES-256 | LOW | Grover reduces to ~128-bit — still acceptable |
-| SHA-256, SHA-384, SHA-512 | LOW | Grover reduces by half — remains adequate |
+*Risk Score 1 — Algorithm volatility (deterministic, no LLM):*
+- Map detected algorithm → `QuantumRisk` level and `algorithm_risk_score` (0–10) using the hard-coded NIST risk table below
+- This score is always reproducible; never calls the LLM
 
-**Depends on:** Detector (list[CryptoHit])
+*Risk Score 2 — Migration complexity risk (LLM-assisted, optional):*
+- Estimate how risky it will be to actually change this specific call site, given:
+  - `blast_radius` from the `DependencyGraph` (how many modules depend on it)
+  - `usage_type` (key exchange is harder than a simple hash call)
+  - library coupling (tightly integrated vs. isolated helper)
+  - code snippet complexity (as assessed by the LLM)
+- Calls `LLMClient` with a short structured prompt; parses a float score 0–10 from the response
+- Falls back to a rule-based heuristic (`blast_radius × 0.5 + usage_type_weight`) if LLM is unavailable
+- This score does **not** determine the migration target — that is still the Planner's job
+
+*Severity and display:*
+- `severity_score` = weighted combination: `0.6 × algorithm_risk_score + 0.4 × migration_risk_score`
+- `risk` (`QuantumRisk` enum) is derived from `algorithm_risk_score` for backward compatibility and display
+- Populate `blast_radius` on each `CryptoFinding` from `DependencyGraph.blast_radius(node_id)`
+
+**Algorithm volatility table (deterministic — do not change without ADR):**
+| Algorithm | QuantumRisk | algorithm_risk_score | Reason |
+|---|---|---|---|
+| RSA (any key size) | CRITICAL | 10.0 | Shor's algorithm breaks integer factoring |
+| ECDSA, ECDH, DSA, DH | CRITICAL | 10.0 | Shor's algorithm breaks discrete log |
+| DES, 3DES | CRITICAL | 9.5 | Classically weak + quantum-reduced further |
+| AES-128 | HIGH | 7.0 | Grover halves effective key strength to ~64 bits |
+| MD5, SHA-1 | HIGH | 6.5 | Collision-broken classically; further weakened by Grover |
+| AES-256 | LOW | 2.0 | Grover reduces to ~128-bit — still acceptable |
+| SHA-256, SHA-384, SHA-512 | LOW | 1.5 | Grover reduces by half — remains adequate |
+
+**Depends on:** Detector (`list[CryptoHit]`, `DependencyGraph`), LLMClient (optional — for `migration_risk_score` only)
 
 ---
 
@@ -488,6 +524,57 @@ This isolates the IBM dependency and makes it replaceable/mockable.
 
 ---
 
+### 6.10 Advisor (`qsma.advisor`)  ★ NEW ★
+
+**Purpose:** A lightweight LLM-backed conversational CLI agent that bridges the scan
+output and the migration pipeline. Instead of selecting findings via CLI menus or
+`--finding-id` flags, the user talks to the advisor in plain English.
+
+**Triggered by:** `qsma chat <path>` CLI command
+**Inputs:** `list[CryptoFinding]`, `DependencyGraph` (from the scan)
+**Outputs:** `list[str]` of confirmed finding IDs → handed to `qsma migrate`
+
+**What the user can do in the conversation:**
+- `"Explain QSMA-0003"` — get a plain-English explanation of a specific finding
+- `"What breaks if I migrate auth/crypto.py?"` — blast-radius answer from DependencyGraph
+- `"Migrate everything CRITICAL except the auth module"` — natural-language selection
+- `"Skip AES-128 for now, only fix RSA"` — filter by algorithm in natural language
+- `"Show me a summary of all HIGH risk findings"` — tabular summary via LLM + Rich
+- `"Confirm"` / `"go"` / `"yes"` — locks in the selection and exits to migration
+
+**How it works:**
+1. On startup, the advisor builds a **system prompt** containing the full scan context:
+   all `CryptoFinding` objects (id, algorithm, risk scores, blast_radius, file, snippet)
+   serialized to a compact JSON block + a brief description of each field.
+2. A **Rich-rendered REPL** loop reads user input from stdin.
+3. Each user message is appended to a rolling conversation history and sent to `LLMClient`.
+4. The LLM responds with natural language. Optionally, a structured JSON sidecar
+   (`{"action": "select", "finding_ids": [...]}`) can be appended when the LLM
+   determines the user has made a final selection — the advisor parses and acts on it.
+5. On confirmation, the advisor prints the selected finding IDs and returns them.
+6. `qsma chat` then calls `qsma migrate --finding-id <id> ...` or hands off programmatically.
+
+**Key design rules (see ADR-012):**
+- The advisor **never modifies source files** — it only produces a finding selection
+- Conversation history is **in-memory only** — not persisted to Redis
+- The LLM system prompt is rebuilt fresh each session from current scan data
+- `/quit`, `/exit`, Ctrl-C all exit without migrating
+- The advisor is **purely optional** — `qsma migrate --auto` bypasses it entirely
+
+**LangGraph node (optional):**
+`advisor_node(state: MigrationSessionState) → MigrationSessionState`
+Sets `state.selected_finding_ids`; can be wired as a pre-step in the MigrationGraph.
+
+**Key classes (planned):**
+```
+AdvisorSession  — findings, dependency_graph, conversation_history, selected_ids
+AdvisorConfig   — max_turns, system_prompt_template
+```
+
+**Depends on:** Classifier (list[CryptoFinding]), Detector (DependencyGraph), LLM Client
+
+---
+
 ## 7. Inter-Module Contracts
 
 All data models are defined in `src/qsma/utils/models.py`.
@@ -496,13 +583,15 @@ All data models are defined in `src/qsma/utils/models.py`.
 ### Critical contracts
 
 ```
-CodebaseSnapshot  →  [Ingestion produces]  →  Analyzer consumes
-AnalysisResult    →  [Analyzer produces]   →  Detector consumes
-list[CryptoHit]   →  [Detector produces]   →  Classifier consumes
-list[CryptoFinding] → [Classifier produces] → Planner, Reporter consume
-list[MigrationPlan] → [Planner produces]   → Migrator consumes
+CodebaseSnapshot     →  [Ingestion produces]   →  Analyzer consumes
+AnalysisResult       →  [Analyzer produces]    →  Detector consumes
+list[CryptoHit]      →  [Detector produces]    →  Classifier consumes
+DependencyGraph      →  [Detector produces]    →  Classifier + Planner consume
+                                                   (also persisted to Neo4j)
+list[CryptoFinding]  →  [Classifier produces]  →  Planner, Reporter consume
+list[MigrationPlan]  →  [Planner produces]     →  Migrator consumes
 list[TransformationResult] → [Migrator produces] → Validator, Reporter consume
-ValidationResult  →  [Validator produces]  →  Reporter consumes
+ValidationResult     →  [Validator produces]   →  Reporter consumes
 ```
 
 Detailed JSON schemas for each are in `docs/contracts/`.
@@ -765,6 +854,7 @@ A migration test passes only when:
 | **LangGraph ≥ 0.2** | Agentic orchestration — Planner, Migrator, Validator | Provider-agnostic `StateGraph`; conditional edges for retry loop; Redis checkpointer for session persistence. Planner, Migrator, and Validator are all LangGraph nodes backed by `LLMClient`. |
 | **Pydantic v2** | Data models/contracts + LangGraph state | Fast validation; typed interface enforcement between modules; `MigrationSessionState` is the LangGraph graph state |
 | **Redis** | Session state persistence + mid-run resume | LangGraph `RedisSaver` checkpointer; key: `qsma:session:<uuid4>`, TTL 24h. Falls back to stateless mode if unavailable. |
+| **Neo4j** | Intra-codebase dependency graph persistence (Detector) | Graph DB storing `Module` nodes and `IMPORTS_FROM`/`CALLS` edges per scan. Enables Planner to query dependency order and blast-radius at agent-reasoning time. Optional at runtime — if unavailable, Detector operates in in-memory-only mode. Configured via `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD` in `.env`. See ADR-010. |
 | **ibm-watsonx-ai** | LLM backend (default) | Primary/default provider for IBM hackathon; Granite Code model; `LLM_PROVIDER=watsonx` |
 | **openai** *(optional extra)* | LLM backend (optional) | `pip install 'qsma[llm-openai]'`; any OpenAI-compatible endpoint; `LLM_PROVIDER=openai_compatible` |
 | **anthropic** *(optional extra)* | LLM backend (optional) | `pip install 'qsma[llm-anthropic]'`; any Anthropic-compatible endpoint; `LLM_PROVIDER=anthropic_compatible` |
@@ -852,8 +942,11 @@ The LLM is used in **all three migration agents**:
 NOT used for:
 - Ingestion (file walking — no LLM)
 - Analyzer (tree-sitter parsing — no LLM)
-- Detector (pattern matching — no LLM)
-- Classifier (NIST risk table lookup — no LLM)
+- Detector (pattern matching and dependency graph construction — no LLM)
+- Classifier **algorithm volatility score** (NIST risk table — no LLM)
+
+Used optionally in:
+- Classifier **migration risk score** — LLM assesses blast-radius + code complexity; falls back to heuristic (see ADR-011)
 
 ### Data storage and caching
 
@@ -1006,6 +1099,84 @@ The LLM client's prompt-builder functions load from this directory.
 **Decision:** The product is CLI-only. No Flask/FastAPI web server, no HTML output
 beyond the Markdown report format.
 **Reason:** Explicit product requirement; reduces scope to achievable hackathon target.
+**Status:** Accepted
+
+---
+
+### ADR-010: Neo4j for intra-codebase dependency graph persistence
+
+**Date:** 2025 (Phase 1 revision)
+**Decision:** After tree-sitter pattern matching, the Detector builds a directed
+dependency graph of all modules in the scanned codebase and persists it to **Neo4j**.
+Nodes are `Module` entities; relationships are `IMPORTS_FROM` and `CALLS`.
+The in-memory `DependencyGraph` Pydantic model is also returned to the Classifier
+for immediate blast-radius calculation without a round-trip.
+**Reason:** Knowing which modules transitively depend on a crypto-bearing module is
+essential for two things: (1) the Classifier needs `blast_radius` to compute
+`migration_risk_score`; (2) the Planner agent needs dependency ordering to avoid
+migrating a module before its dependents are accounted for. A graph DB is the
+natural fit for this traversal query. Neo4j is chosen because it has a mature Python
+driver (`neo4j`), supports Cypher queries, and the team can use AuraDB free tier.
+**Impact:** New env vars: `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD` (all optional —
+Detector falls back to in-memory-only mode if not set). New dependency: `neo4j>=5.0`.
+New models: `DependencyNode`, `DependencyGraph` in `src/qsma/utils/models.py`.
+New Detector sub-phase documented in §6.3.
+**Status:** Accepted
+
+---
+
+### ADR-012: Advisor module — conversational LLM agent for finding selection
+
+**Date:** 2025 (Phase 2 addition)
+**Decision:** A new `qsma.advisor` module provides a conversational CLI interface between
+the scan output (`list[CryptoFinding]` + `DependencyGraph`) and the migration trigger.
+Accessed via `qsma chat <path>`. The user interacts in natural language; the LLM
+(via `LLMClient`) answers questions and resolves intent to a concrete `list[finding_id]`.
+**Reason:** Selecting findings via `--finding-id` flags or numbered menus is unfriendly
+for non-expert users. A large codebase may have 50+ findings; a user needs to ask
+"what depends on auth/crypto.py?" or "which CRITICAL findings can I safely skip?" before
+deciding. The LLM has all the context (findings, risk scores, blast radii) in its system
+prompt and can answer these questions accurately.
+**Impact:**
+- New module: `src/qsma/advisor/__init__.py`
+- New CLI command: `qsma chat <path>`
+- The advisor is **purely additive** — `qsma migrate --auto` and `qsma migrate --finding-id`
+  still work without it. No existing module is changed.
+- Conversation history is in-memory only; no Redis required for advisor.
+- The advisor never modifies source files; it only produces a finding ID list.
+- New LLM system prompt template needed: `src/qsma/llm/training_data/prompts/advisor_system.txt`
+**Status:** Accepted
+
+---
+
+### ADR-011: Dual risk scoring in Classifier — deterministic algorithm score + LLM migration score
+
+**Date:** 2025 (Phase 1 revision)
+**Decision:** The Classifier produces **two independent risk scores** per finding:
+
+1. `algorithm_risk_score` (0–10): fully deterministic, hard-coded NIST risk table.
+   Measures quantum vulnerability of the algorithm itself. Never calls LLM.
+   RSA/ECC/DH = 10.0; AES-256/SHA-256 = 1.5–2.0. Cannot change without a new ADR.
+
+2. `migration_risk_score` (0–10): LLM-assisted, probabilistic.
+   Measures how risky/complex it will be to actually migrate this call site,
+   considering `blast_radius` (transitive dependent count from Neo4j/DependencyGraph),
+   `usage_type`, library coupling, and snippet complexity.
+   LLM call is optional — falls back to `min(blast_radius × 0.5 + usage_type_weight, 10.0)`.
+
+Combined `severity_score = 0.6 × algorithm_risk_score + 0.4 × migration_risk_score`.
+`QuantumRisk` enum (CRITICAL/HIGH/MEDIUM/LOW/INFO) is derived from `algorithm_risk_score`
+for display and backward compatibility.
+
+**Reason:** A finding with RSA in an isolated utility used by no other module is far
+less urgent to migrate than one with AES-128 deep in a shared library depended on by
+30 other modules. The original single-score design did not capture this. Algorithm
+volatility must remain deterministic (auditable); migration complexity benefits from
+LLM reasoning but must gracefully degrade to a heuristic when offline.
+**Impact:** `CryptoFinding` gains `algorithm_risk_score`, `migration_risk_score`, `blast_radius`,
+`dependency_node_id` fields. `severity_score` is now a computed weighted combination.
+`MigrationPlan.strategy` no longer includes `"deterministic_rewrite"` — all migration is LLM-agentic (see ADR-002).
+Classifier now has an **optional** LLM dependency for `migration_risk_score` only.
 **Status:** Accepted
 
 ---

@@ -61,12 +61,12 @@ class Algorithm(str, Enum):
 
 
 class MigrationStatus(str, Enum):
-    PENDING    = "pending"
-    SELECTED   = "selected"
+    PENDING     = "pending"
+    SELECTED    = "selected"
     IN_PROGRESS = "in_progress"
-    COMPLETED  = "completed"
-    FAILED     = "failed"
-    SKIPPED    = "skipped"
+    COMPLETED   = "completed"
+    FAILED      = "failed"
+    SKIPPED     = "skipped"
 
 
 # ---------------------------------------------------------------------------
@@ -83,21 +83,132 @@ class CodeLocation(BaseModel):
     snippet: str | None = None          # Short code excerpt for display
 
 
+# ---------------------------------------------------------------------------
+# Dependency graph models  (produced by Detector, stored in Neo4j)
+# ---------------------------------------------------------------------------
+
+class DependencyNode(BaseModel):
+    """
+    A single node in the intra-codebase dependency graph.
+
+    Represents one module/file in the codebase.  Edges in Neo4j express
+    IMPORTS_FROM and CALLS relationships between nodes.
+
+    Produced by: Detector (dependency graph phase)
+    Consumed by: Classifier (blast-radius scoring), Planner (migration context)
+    """
+    node_id: str                        # Stable key: absolute file path (normalised)
+    module_name: str                    # Python dotted name or language equivalent
+    file: Path
+    language: str                       # "python", "java", "go", "c", "rust"
+    # True if this node contains ≥1 CryptoHit — marks it as a crypto-bearing module
+    has_crypto: bool = False
+    # Direct dependents: modules that import / call this module
+    direct_dependents: list[str] = Field(default_factory=list)   # node_id list
+    # Transitive dependents: all upstream callers (computed via graph traversal)
+    transitive_dependents: list[str] = Field(default_factory=list)
+
+
+class DependencyGraph(BaseModel):
+    """
+    Full intra-codebase dependency graph produced by the Detector for a
+    single scan target.
+
+    Storage: persisted to Neo4j (`neo4j://...`) keyed by session_id.
+    The in-memory representation here is used for immediate blast-radius
+    calculations inside the Classifier; Neo4j is the durable store for
+    the Planner agent to query when reasoning about migration order.
+
+    Produced by: Detector
+    Consumed by: Classifier (blast-radius), Planner (migration sequencing)
+    """
+    session_id: str
+    nodes: dict[str, DependencyNode] = Field(default_factory=dict)  # node_id → node
+    # Adjacency list: node_id → list of node_ids it directly depends on (IMPORTS_FROM edges)
+    edges: dict[str, list[str]] = Field(default_factory=dict)
+
+    def blast_radius(self, node_id: str) -> int:
+        """
+        Return the count of modules that transitively depend on `node_id`.
+        A higher number means changing this module affects more of the codebase.
+        """
+        node = self.nodes.get(node_id)
+        if node is None:
+            return 0
+        return len(node.transitive_dependents)
+
+
+# ---------------------------------------------------------------------------
+# Detection models
+# ---------------------------------------------------------------------------
+
+class CryptoHit(BaseModel):
+    """
+    A raw, unclassified detection of a cryptographic usage site.
+
+    Produced by: Detector (pattern-matching phase, before classification)
+    Consumed by: Classifier
+    """
+    rule_id: str                        # e.g. "rsa-key-gen", "ecdh-exchange"
+    algorithm_hint: str                 # Raw string hint from the detection rule
+    usage_type: str                     # e.g. "key_exchange", "signature", "encryption"
+    location: CodeLocation
+    raw_node_info: dict[str, Any] = Field(default_factory=dict)
+    # node_id of the DependencyNode this hit belongs to (links hit → graph)
+    dependency_node_id: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Classification models
+# ---------------------------------------------------------------------------
+
 class CryptoFinding(BaseModel):
     """
-    A single detected cryptographic usage site.
-    Produced by: Detector → Classifier
+    A classified cryptographic usage site with dual risk scores.
+
+    The two risk dimensions are intentionally independent:
+      - algorithm_risk: deterministic, NIST-table-driven — how quantum-vulnerable
+        the algorithm itself is.  Hard-coded, reproducible, never calls LLM.
+      - migration_risk: probabilistic, LLM-assisted — how hard/risky it will be
+        to actually migrate this specific call site, accounting for blast radius
+        (transitive dependent count), usage complexity, and library coupling.
+        LLM call is optional; falls back to a heuristic score if LLM unavailable.
+
+    Produced by: Classifier
     Consumed by: Planner, Reporter, Migrator
     """
     id: str                             # Stable unique ID, e.g. "QSMA-0001"
     algorithm: Algorithm
-    risk: QuantumRisk
+    risk: QuantumRisk                   # Derived from algorithm_risk (backward-compat alias)
+
+    # ── Dual risk scores ─────────────────────────────────────────────────
+    # Score 1: algorithm volatility — how quantum-vulnerable is this algorithm?
+    # Source: hard-coded NIST risk table in Classifier.  Range 0.0–10.0.
+    # 10.0 = broken by Shor's (RSA, ECC, DH); 0.0 = quantum-safe.
+    algorithm_risk_score: float = Field(ge=0.0, le=10.0, default=0.0)
+
+    # Score 2: migration complexity risk — how hard will migration actually be?
+    # Source: LLM-assisted heuristic in Classifier, informed by blast_radius,
+    # usage_type, library coupling, and code complexity.  Range 0.0–10.0.
+    # 10.0 = extremely risky to migrate (many dependents, tightly coupled).
+    # Falls back to a rule-based heuristic if LLM is unavailable.
+    migration_risk_score: float = Field(ge=0.0, le=10.0, default=0.0)
+
+    # Combined severity for display / prioritisation (weighted average or max)
+    severity_score: float = Field(ge=0.0, le=10.0, default=0.0)
+
     location: CodeLocation
     usage_type: str                     # e.g. "key_exchange", "signature", "encryption"
     library: str | None = None          # e.g. "cryptography", "OpenSSL", "hashlib"
-    severity_score: float = Field(ge=0.0, le=10.0, default=0.0)
     explanation: str                    # Human-readable reason for the risk
     recommendation: str                 # Suggested replacement
+
+    # ── Blast-radius context ──────────────────────────────────────────────
+    # Count of modules that transitively depend on the module containing this finding.
+    # Populated by Classifier from DependencyGraph.blast_radius(node_id).
+    blast_radius: int = 0
+    dependency_node_id: str | None = None  # Links back to DependencyGraph node
+
     migration_status: MigrationStatus = MigrationStatus.PENDING
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -109,13 +220,16 @@ class MigrationPlan(BaseModel):
     Consumed by: Migrator
     """
     finding_id: str
-    strategy: str                       # e.g. "deterministic_rewrite", "llm_assisted"
+    strategy: str                       # e.g. "llm_assisted", "manual_only"
     target_algorithm: Algorithm
     description: str
     estimated_complexity: str           # "low" | "medium" | "high"
     requires_dependency_update: bool = False
     new_dependencies: list[str] = Field(default_factory=list)
     transformation_hints: dict[str, Any] = Field(default_factory=dict)
+    # Dependency graph context passed to the Planner agent so it can reason
+    # about migration order and downstream impact
+    affected_dependency_node_ids: list[str] = Field(default_factory=list)
 
 
 class TransformationResult(BaseModel):
@@ -163,3 +277,5 @@ class ScanReport(BaseModel):
     transformation_results: list[TransformationResult] = Field(default_factory=list)
     validation_result: ValidationResult | None = None
     scan_duration_seconds: float = 0.0
+    # Dependency graph summary for display in the scan report
+    dependency_graph: DependencyGraph | None = None

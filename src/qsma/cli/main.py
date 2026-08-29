@@ -27,9 +27,10 @@ def cli() -> None:
     \b
     Typical workflow:
         qsma scan  <path>          — detect crypto findings
-        qsma report <path>         — display findings report
-        qsma migrate <path>        — interactively migrate selected findings
+        qsma chat  <path>          — talk to the AI advisor about findings (recommended)
+        qsma migrate <path>        — apply migrations selected by advisor or by ID
         qsma validate <path>       — validate post-migration correctness
+        qsma report <path>         — display/export findings report
     """
 
 
@@ -56,9 +57,10 @@ def report(path: str, findings: str | None) -> None:
 @click.argument("path", default=".", type=click.Path(exists=True))
 @click.option("--finding-id", multiple=True, help="Migrate specific finding ID(s) only.")
 @click.option("--dry-run", is_flag=True, default=False, help="Show proposed changes without applying.")
-@click.option("--auto", is_flag=True, default=False, help="Non-interactive: migrate all HIGH findings.")
-def migrate(path: str, finding_id: tuple[str, ...], dry_run: bool, auto: bool) -> None:
-    """Interactively select and apply quantum-safe migrations."""
+@click.option("--auto", is_flag=True, default=False, help="Non-interactive: migrate all CRITICAL+HIGH findings.")
+@click.option("--resume", default=None, help="Resume an interrupted session by session ID.")
+def migrate(path: str, finding_id: tuple[str, ...], dry_run: bool, auto: bool, resume: str | None) -> None:
+    """Apply quantum-safe migrations. Use `qsma chat` first to select findings interactively."""
     console.print(f"[bold cyan]qsma migrate[/bold cyan] — target: {path}  [dim](stub)[/dim]")
     console.print("[yellow]Module not yet implemented — see PROJECT_CONTEXT.md[/yellow]")
 
@@ -70,6 +72,28 @@ def validate(path: str, timeout: int) -> None:
     """Run post-migration validation (build + tests) on a codebase."""
     console.print(f"[bold cyan]qsma validate[/bold cyan] — target: {path}  [dim](stub)[/dim]")
     console.print("[yellow]Module not yet implemented — see PROJECT_CONTEXT.md[/yellow]")
+
+
+@cli.command()
+@click.argument("path", default=".", type=click.Path(exists=True))
+@click.option("--scan-first", is_flag=True, default=True, help="Run scan before opening advisor (default: on).")
+@click.option("--findings", type=click.Path(), default=None, help="Load findings from a previous scan JSON.")
+def chat(path: str, scan_first: bool, findings: str | None) -> None:
+    """Talk to the AI advisor about your scan results in natural language.
+
+    \b
+    The advisor can:
+      - Explain any finding and its blast radius
+      - Answer "what breaks if I migrate X?"
+      - Accept natural-language migration selection:
+          "migrate everything CRITICAL except the auth module"
+          "skip AES-128 for now, only fix RSA findings"
+      - Hand off your confirmed selection to `qsma migrate`
+
+    Type 'help', 'quit', or Ctrl-C to exit.
+    """
+    console.print(f"[bold cyan]qsma chat[/bold cyan] — target: {path}  [dim](stub)[/dim]")
+    console.print("[yellow]Advisor module not yet implemented — see PROJECT_CONTEXT.md §6.10[/yellow]")
 
 
 if __name__ == "__main__":

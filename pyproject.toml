@@ -40,6 +40,10 @@ dependencies = [
     # Optional at runtime: if Redis unavailable, tool falls back to stateless mode
     "redis>=5.0",
 
+    # Dependency graph persistence — Neo4j (ADR-010)
+    # Optional at runtime: if NEO4J_URI unset, Detector falls back to in-memory DependencyGraph only
+    "neo4j>=5.0",
+
     # Configuration / environment
     "python-dotenv>=1.0",
     "pydantic>=2.5",       # data models and contract validation; MigrationSessionState is LangGraph state

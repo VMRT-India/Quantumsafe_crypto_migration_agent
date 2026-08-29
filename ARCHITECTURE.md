@@ -55,7 +55,7 @@
 | [`src/qsma/cli/__init__.py`](src/qsma/cli/__init__.py) | Stub | Package marker. Empty. |
 | [`src/qsma/cli/main.py`](src/qsma/cli/main.py) | ✅ Implemented | **CLI entry point.** Click group `cli` with 4 sub-commands: `scan(path, fmt, output)`, `report(path, findings)`, `migrate(path, finding_id, dry_run, auto, resume)`, `validate(path, timeout)`. All commands respond but delegate no logic yet — each prints a stub message. Uses `rich.console.Console` for output. |
 | [`src/qsma/utils/__init__.py`](src/qsma/utils/__init__.py) | Stub | Package marker. Empty. |
-| [`src/qsma/utils/models.py`](src/qsma/utils/models.py) | ✅ Implemented | **Canonical inter-module contracts (Pydantic).** Do NOT redefine these in individual modules. Contains: `QuantumRisk` enum, `Algorithm` enum (including post-quantum targets), `MigrationStatus` enum, `CodeLocation`, `CryptoFinding`, `MigrationPlan`, `TransformationResult`, `ValidationResult`, `ScanReport`. **To add:** `MigrationSessionState` — LangGraph state model (session_id, pending_plans, completed, retry_count, retry_hints). |
+| [`src/qsma/utils/models.py`](src/qsma/utils/models.py) | ✅ Implemented | **Canonical inter-module contracts (Pydantic).** Do NOT redefine these in individual modules. Contains: `QuantumRisk` enum, `Algorithm` enum (including post-quantum targets), `MigrationStatus` enum, `CodeLocation`, `CryptoHit`, `CryptoFinding` (dual risk scores + blast_radius), `DependencyNode`, `DependencyGraph`, `MigrationPlan`, `TransformationResult`, `ValidationResult`, `ScanReport`. **To add:** `MigrationSessionState`, `AdvisorSession`. |
 | [`src/qsma/utils/session.py`](src/qsma/utils/session.py) | 🔲 Stub | **Planned (Phase 2):** Redis session manager. Serialize/deserialize `MigrationSessionState`. `get_session(id)`, `save_session(state)`, `delete_session(id)`. Falls back to in-memory if Redis unavailable. |
 | [`src/qsma/llm/__init__.py`](src/qsma/llm/__init__.py) | Stub | Package marker. Empty. |
 | [`src/qsma/llm/client.py`](src/qsma/llm/client.py) | ✅ Implemented | **Provider-agnostic LLM client.** Class `LLMClient`. Providers: `watsonx` (default), `openai_compatible`, `anthropic_compatible`, `mock`. Switch via `LLM_PROVIDER` env var. Called by LangGraph agent nodes — never called directly by pipeline modules. |
@@ -64,8 +64,9 @@
 | [`src/qsma/agent/graph.py`](src/qsma/agent/graph.py) | 🔲 Stub | **Planned (Phase 2):** LangGraph `StateGraph` wiring `planner_node → migrator_node → validator_node`. Conditional edges for retry (≤3) and escalation. Redis checkpointer via `RedisSaver`. See ADR-007. |
 | [`src/qsma/ingestion/__init__.py`](src/qsma/ingestion/__init__.py) | 🔲 Stub | Empty. Planned: file walker, `CodebaseSnapshot`, `IngestionConfig`. Language detection by file extension. |
 | [`src/qsma/analyzer/__init__.py`](src/qsma/analyzer/__init__.py) | 🔲 Stub | Empty. Planned: **tree-sitter** multi-language AST parser (all languages) + libcst CST builder (Python only). Produces `AnalysisResult` with `ParsedFile` per source file. See ADR-006. |
-| [`src/qsma/detector/__init__.py`](src/qsma/detector/__init__.py) | 🔲 Stub | Empty. Planned: tree-sitter query-based pattern matching across all languages, produces `list[CryptoHit]`. |
-| [`src/qsma/classifier/__init__.py`](src/qsma/classifier/__init__.py) | 🔲 Stub | Empty. Planned: quantum risk scoring, severity, produces `list[CryptoFinding]`. Deterministic — no LLM. |
+| [`src/qsma/detector/__init__.py`](src/qsma/detector/__init__.py) | 🔲 Stub | Empty. Planned: (A) tree-sitter query-based pattern matching → `list[CryptoHit]`; (B) build intra-codebase `DependencyGraph` and persist to Neo4j. See ADR-010. |
+| [`src/qsma/classifier/__init__.py`](src/qsma/classifier/__init__.py) | 🔲 Stub | Empty. Planned: dual risk scoring — `algorithm_risk_score` (deterministic NIST table, no LLM) + `migration_risk_score` (LLM-assisted, uses `DependencyGraph.blast_radius`). Produces `list[CryptoFinding]`. See ADR-011. |
+| [`src/qsma/advisor/__init__.py`](src/qsma/advisor/__init__.py) | 🔲 Stub | **NEW.** Planned (Phase 2): LLM-backed conversational REPL. Receives `list[CryptoFinding]` + `DependencyGraph`; user interacts in natural language; returns confirmed `list[finding_id]`. Entry point: `qsma chat`. See ADR-012. |
 | [`src/qsma/planner/__init__.py`](src/qsma/planner/__init__.py) | 🔲 Stub | Empty. Planned: **LangGraph node** `planner_node(state)`. Always calls LLM: produces `MigrationPlan` (target algorithm, dependency changes, transformation hints) from `CryptoFinding` + few-shot examples. NIST target table is prompt context, not hard-coded rules. Persists to Redis. |
 | [`src/qsma/migrator/__init__.py`](src/qsma/migrator/__init__.py) | 🔲 Stub | Empty. Planned: **LangGraph node** `migrator_node(state)`. Fully LLM-driven: builds prompt from `MigrationPlan` + code context + few-shot examples → calls `LLMClient` → splices result into source file via libcst patcher. Retries on Validator signal (max 3). Persists per-file result to Redis. |
 | [`src/qsma/validator/__init__.py`](src/qsma/validator/__init__.py) | 🔲 Stub | Empty. Planned: **LangGraph node** `validator_node(state)`. Syntax check + test run + LLM failure analysis. Routes: pass → Reporter, retry → migrator_node, escalate → MANUAL_REQUIRED. |
@@ -133,18 +134,30 @@ User
                         ▼
 ┌──────────────────────────────────────────────────┐
 │  Detector  (src/qsma/detector/)                  │
-│  • tree-sitter query-based pattern matching      │
+│  Phase A: tree-sitter query pattern matching     │
 │  • Works across ALL supported languages          │
 │  • Per-language crypto pattern libraries         │
-│  • Produces: list[CryptoHit]  (raw, unclassified)│
-└───────────────────────┬──────────────────────────┘
-                        │ list[CryptoHit]
-                        ▼
+│  • Tags each CryptoHit with dependency_node_id   │
+│  Phase B: dependency graph construction          │
+│  • Builds DependencyGraph (nodes + edges)        │
+│  • Computes direct + transitive dependents       │
+│  • Persists to Neo4j (optional; in-memory fallback)│
+│  • Produces: list[CryptoHit] + DependencyGraph   │
+└──────────┬──────────────────────────┬────────────┘
+           │ list[CryptoHit]          │ DependencyGraph
+           │                          │ (also → Neo4j)
+           └──────────┬───────────────┘
+                      ▼
 ┌──────────────────────────────────────────────────┐
 │  Classifier  (src/qsma/classifier/)              │
-│  • Assigns QuantumRisk, severity_score, urgency  │
-│  • Maps algorithm → NIST post-quantum guidance   │
-│  • Deterministic — never calls LLM               │
+│  Score 1 — algorithm_risk_score (deterministic): │
+│  • Hard-coded NIST risk table; never calls LLM   │
+│  • RSA/ECC/DH=10.0, AES-128=7.0, AES-256=2.0…  │
+│  Score 2 — migration_risk_score (LLM-assisted):  │
+│  • blast_radius from DependencyGraph             │
+│  • usage_type + library coupling + complexity    │
+│  • LLM optional; heuristic fallback available    │
+│  severity_score = 0.6×alg_risk + 0.4×mig_risk  │
 │  • Produces: list[CryptoFinding]  (models.py)    │
 └───────────────────────┬──────────────────────────┘
                         │ list[CryptoFinding]
@@ -212,7 +225,8 @@ Shared infrastructure:
 └──────────────────────────────────────────────────┘
 
 Inter-module data contracts (all defined in src/qsma/utils/models.py):
-  CodeLocation · CryptoFinding · MigrationPlan
+  CodeLocation · CryptoHit · CryptoFinding · MigrationPlan
+  DependencyNode · DependencyGraph (blast_radius method)
   TransformationResult · ValidationResult · ScanReport
   MigrationSessionState (LangGraph state — includes session_id, pending_plans,
     completed_findings, retry_count, retry_hints)
@@ -224,8 +238,9 @@ Inter-module data contracts (all defined in src/qsma/utils/models.py):
 - **libcst** (Python-only, Migrator only) for lossless CST roundtrip — preserves comments and formatting
 - **LangGraph ≥ 0.2** for agentic Planner → Migrator → Validator loop with typed state and retry
 - **Redis** for session state persistence — mid-run resume via `--resume <session_id>`
+- **Neo4j** for intra-codebase dependency graph — `IMPORTS_FROM`/`CALLS` edges; blast-radius queries by Classifier + Planner (optional; in-memory fallback) — see ADR-010
 - **IBM watsonx.ai** as default LLM (Granite Code model) — switch via `.env` only
-- **Pydantic v2** for all inter-module data models including `MigrationSessionState`
+- **Pydantic v2** for all inter-module data models including `MigrationSessionState`, `DependencyGraph`, `CryptoHit`
 - **Click + Rich** for CLI — thin layer, no business logic in CLI module
 
 ---

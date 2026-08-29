@@ -12,8 +12,9 @@ module against the schema without waiting for upstream/downstream modules to be 
 |---|---|---|---|
 | `codebase_snapshot.md` | `CodebaseSnapshot` | Ingestion | Analyzer |
 | `analysis_result.md` | `AnalysisResult` | Analyzer | Detector |
-| `crypto_hit.md` | `CryptoHit` | Detector | Classifier |
-| `crypto_finding.md` | `CryptoFinding` | Classifier | Planner, Reporter |
+| `crypto_hit.md` | `CryptoHit` | Detector (Phase A) | Classifier |
+| `dependency_graph.md` | `DependencyGraph` + `DependencyNode` | Detector (Phase B) | Classifier (blast radius), Planner (migration order); also persisted to Neo4j |
+| `crypto_finding.md` | `CryptoFinding` (dual risk scores + blast_radius) | Classifier | Planner, Reporter |
 | `migration_plan.md` | `MigrationPlan` | Planner | Migrator |
 | `transformation_result.md` | `TransformationResult` | Migrator | Validator, Reporter |
 | `validation_result.md` | `ValidationResult` | Validator | Reporter |

@@ -11,17 +11,20 @@ post-quantum standards using a LangGraph agentic loop backed by IBM watsonx.ai.
 ## What it does
 
 ```
-qsma scan <path>               →  detect crypto findings across all supported languages
-qsma report <path>             →  display a structured findings report
-qsma migrate <path>            →  select findings and apply LLM-agentic quantum-safe migrations
+qsma scan <path>               →  detect crypto findings, build dependency graph, dual risk scores
+qsma chat <path>               →  talk to the AI advisor in natural language about findings ★ NEW ★
+qsma migrate <path>            →  apply LLM-agentic quantum-safe migrations
 qsma migrate --resume <id>     →  resume an interrupted migration from Redis session state
 qsma validate <path>           →  validate migrated code builds and tests still pass
+qsma report <path>             →  display a structured findings report
 ```
 
 **Full workflow:**
 
 ```
-Analyze → Detect → Explain → Prioritize → Select → Migrate → Validate → Report
+Scan → Detect → Build dependency graph → Dual-score classify
+  → Chat with AI advisor (natural language) → Confirm selection
+    → Migrate (Planner→Migrator→Validator agents) → Validate → Report
 ```
 
 ---
@@ -71,20 +74,27 @@ module specifications, dependency graph, parallelization plan, and development p
 See [`ARCHITECTURE.md`](ARCHITECTURE.md) — full pipeline diagram and file index.
 
 ```
-CLI → Ingestion → Analyzer → Detector → Classifier
-                 (tree-sitter,           (NIST risk table,
-                  all languages)          no LLM)
-                                               ↓
-                              ┌────────────────────────────────┐
-                              │  LangGraph MigrationGraph       │
-                              │  (Redis session state)          │
-                              │  Planner agent                  │
-                              │    → Migrator agent             │
-                              │      → Validator agent          │
-                              │        → retry or pass          │
-                              └────────────────┬───────────────┘
-                                               ↓
-                                           Reporter
+CLI → Ingestion → Analyzer → Detector ──────────────────────────────────────────────┐
+                             (tree-sitter     Phase A: list[CryptoHit]               │
+                              all languages)  Phase B: DependencyGraph → Neo4j       │
+                                                        (blast radius per module)    │
+                                                   ↓                                 │
+                                            Classifier                               │
+                                    Score 1: algorithm_risk_score                    │
+                                    (hard-coded NIST table — no LLM)                │
+                                    Score 2: migration_risk_score                    │
+                                    (LLM-assisted, uses blast_radius from graph)     │
+                                             ↓ list[CryptoFinding]                   │
+                              ┌──────────────────────────────────────┐               │
+                              │  LangGraph MigrationGraph            │ ←─────────────┘
+                              │  (Redis session state)               │  DependencyGraph
+                              │  Planner agent (queries Neo4j)       │
+                              │    → Migrator agent                  │
+                              │      → Validator agent               │
+                              │        → retry or pass               │
+                              └──────────────────┬───────────────────┘
+                                                 ↓
+                                             Reporter
 ```
 
 ---
@@ -104,8 +114,9 @@ src/qsma/
 ├── cli/                   — Click commands (thin orchestration layer)
 ├── ingestion/             — Filesystem walk, language detection, source file collection
 ├── analyzer/              — tree-sitter (all languages) + libcst CST builder (Python only)
-├── detector/              — tree-sitter query pattern-matching for crypto usage (all languages)
-├── classifier/            — Quantum risk scoring via NIST risk table (no LLM)
+├── detector/              — tree-sitter pattern-matching for crypto + DependencyGraph builder (Neo4j)
+├── classifier/            — Dual risk scoring: algorithm_risk (NIST table) + migration_risk (LLM-assisted)
+├── advisor/               — NEW: conversational LLM agent (qsma chat); natural-language finding selection
 ├── planner/               — LangGraph agent node: LLM reasons migration strategy per finding
 ├── migrator/              — LangGraph agent node: LLM generates transformed code; libcst splices it in
 ├── validator/             — LangGraph agent node: syntax/test check + LLM failure analysis + retry signal
