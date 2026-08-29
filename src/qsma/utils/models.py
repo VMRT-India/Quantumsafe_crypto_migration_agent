@@ -282,45 +282,93 @@ class ScanReport(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Agent session state  (LangGraph state persisted to Redis)
+# Planner execution plan models
+# ---------------------------------------------------------------------------
+
+class FindingMeta(BaseModel):
+    """
+    Location and dependency metadata for one finding, as emitted by the Planner
+    in the execution plan.  Gives the Migrator everything it needs to locate and
+    transform the finding without re-reading the full CryptoFinding.
+
+    Produced by: Planner  (inside MigrationExecutionPlan)
+    Consumed by: Migrator
+
+    Notes on location fields:
+      line_start / line_end — reference coordinates from the original scan.
+        They are ADVISORY ONLY.  After earlier findings in the same file are
+        patched, line numbers shift.  The Migrator must locate the target by
+        symbol_name / snippet context, not by relying on exact line numbers.
+      symbol_name — the enclosing function, method, or class block that contains
+        the crypto usage (e.g. "sign_data", "KeyManager.__init__").  Empty string
+        if the Detector could not determine it.  Primary locator for the Migrator.
+    """
+    finding_id: str
+    order: int                          # global sequence number (1-based) across all waves
+    file: Path
+    language: str                       # e.g. "python", "java", "go"
+    symbol_name: str = ""               # enclosing function/class/block name; "" if unknown
+    line_start: int
+    line_end: int
+    algorithm: str                      # source algorithm value string
+    description: str                    # human-readable summary of what to change
+    # finding_ids of OTHER findings whose migrations must complete before this one
+    depends_on: list[str] = Field(default_factory=list)
+
+
+class MigrationExecutionPlan(BaseModel):
+    """
+    The full output document produced by the Planner stage.
+    This is the direct input to the Migrator stage.
+
+    Structure:
+      waves      — parallel execution batches in dependency order.
+                   wave[0] can all run in parallel (no inter-dependencies).
+                   wave[1] can start only when ALL of wave[0] are complete.
+                   etc.  Max 6 findings per wave (parallel agent cap).
+      finding_plans — the MigrationPlan for each finding_id
+      finding_meta  — location + dependency metadata for each finding_id
+
+    Produced by: Planner
+    Consumed by: Migrator
+    Persisted to: Redis session (keyed by session_id)
+    """
+    session_id: str
+    waves: list[list[str]] = Field(default_factory=list)
+    # finding_id → MigrationPlan (what to change and how)
+    finding_plans: dict[str, MigrationPlan] = Field(default_factory=dict)
+    # finding_id → FindingMeta (where to change it)
+    finding_meta: dict[str, FindingMeta] = Field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# Graph envelope — thin session state for LangGraph wiring only
 # ---------------------------------------------------------------------------
 
 class MigrationSessionState(BaseModel):
     """
-    Shared state threaded through the LangGraph agent graph
-    (planner_node → migrator_node → validator_node).
+    Thin envelope threaded through the LangGraph graph by agent/graph.py.
 
-    Persisted to Redis after every node transition so the session can be
-    resumed with `qsma migrate --resume <session_id>`.
+    This model holds ONLY the data that must cross module boundaries between
+    the three pipeline stages.  Each stage owns its own internal state type:
+      Planner  → PlannerState   (qsma/planner/state.py)
+      Migrator → MigratorState  (qsma/migrator/state.py)
+      Validator→ ValidatorState (qsma/validator/state.py)
 
-    Produced/consumed by: Planner, Migrator, Validator
-    Persisted by: utils/session.py (Redis, TTL 24 h)
+    graph.py reads the appropriate sub-state from here before calling each
+    node and writes the node's output back when it completes.
+
+    Persisted to Redis after each node transition (TTL 24 h, ADR-008).
+    Resume via `qsma migrate --resume <session_id>`.
     """
     session_id: str
     target_path: Path
 
-    # ── Input findings ────────────────────────────────────────────────────
-    # Full list of findings selected by the user (or --auto) for migration.
-    selected_findings: list[CryptoFinding] = Field(default_factory=list)
+    # ── Cross-boundary outputs (written by each stage, read by the next) ─
+    execution_plan: MigrationExecutionPlan | None = None     # Planner → Migrator
+    transformation_results: list[TransformationResult] = Field(default_factory=list)  # Migrator → Validator
+    validation_results: list[ValidationResult] = Field(default_factory=list)          # Validator → Reporter
 
-    # ── Planner outputs ───────────────────────────────────────────────────
-    # Plans produced so far; keyed by finding_id for easy lookup.
-    # Appended by planner_node; read by migrator_node.
-    pending_plans: dict[str, MigrationPlan] = Field(default_factory=dict)
-
-    # ── Migrator / Validator tracking ────────────────────────────────────
-    completed_findings: list[str] = Field(default_factory=list)    # finding_id list
-    failed_findings: list[str] = Field(default_factory=list)       # finding_id list
-
-    # Current finding being processed (one at a time through the loop)
+    # ── Routing (set by each node for graph.py to act on) ─────────────────
     current_finding_id: str | None = None
-    retry_count: int = 0                    # attempts for current finding
-    retry_hints: dict[str, Any] = Field(default_factory=dict)      # from Validator
-
-    # Accumulated transformation results
-    transformation_results: list[TransformationResult] = Field(default_factory=list)
-
-    # ── Control ───────────────────────────────────────────────────────────
-    dry_run: bool = False                   # True → diff only, no file writes
-    # Routing signal set by validator_node: "pass" | "retry" | "escalate" | "done"
-    routing_signal: str = "pass"
+    routing_signal: str = "pass"    # "validate" | "retry" | "escalate" | "done"

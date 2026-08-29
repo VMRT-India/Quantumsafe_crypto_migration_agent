@@ -396,32 +396,57 @@ DependencyGraph — session_id, nodes, edges, blast_radius(node_id) → int
 
 ### 6.5 Planner (`qsma.planner`)
 
-**Purpose:** For each selected `CryptoFinding`, reason about the correct migration strategy and produce an actionable `MigrationPlan`. Implemented as a **LangGraph agent node** — always calls the LLM.
+**Purpose:** For every selected `CryptoFinding` — in any language — reason about the correct
+migration strategy, determine a safe execution order, and emit a complete `MigrationExecutionPlan`
+that the Migrator consumes directly.  Implemented as a **LangGraph agent node**.
 
 **Inputs:** `list[CryptoFinding]` (selected subset), `MigrationSessionState` (from Redis)
-**Outputs:** `list[MigrationPlan]`, updated `MigrationSessionState`
+**Outputs:** `MigrationExecutionPlan`, updated `MigrationSessionState`
 
 **Responsibilities:**
-- Call `LLMClient` with a structured prompt that includes: the detected algorithm, the usage type, the code snippet, the NIST PQC target, and relevant few-shot examples from `training_data/few_shot/`
-- Parse the LLM response into a `MigrationPlan`: target algorithm, required dependency changes (`requirements.txt` / `go.mod` / `pom.xml`), and `transformation_hints` for the Migrator
-- For non-Python findings where automated migration is not supported: produce `MigrationPlan(strategy=manual_only)` with an explanation — no LLM call needed
-- Persist each `MigrationPlan` to Redis session as it is produced (enables resume)
 
-**Target algorithm mapping (provided as context in the LLM prompt — not hard-coded rules):**
+1. **LLM plan per finding (all languages)** — Call `LLMClient` for every finding regardless
+   of language.  The prompt includes: language, detected algorithm, usage type, the code snippet,
+   the NIST PQC suggested target, and relevant few-shot examples from `training_data/few_shot/`.
+   The LLM sees the snippet and produces the replacement in the same language.
+   `strategy=manual_only` is only returned when the **LLM itself decides** it cannot
+   safely produce a replacement — never hard-coded by language.
+
+2. **Dependency-safe ordering (topological sort)** — Sort findings so that a module is always
+   migrated **before** any module that imports it.  Uses Kahn's algorithm on the finding
+   dependency sub-graph (edges from `CryptoFinding.metadata["depends_on_node_ids"]`).
+   Ties broken by descending `blast_radius` (highest-impact modules first within each level).
+
+3. **Parallel wave packing** — Pack the topo-sorted findings into parallel execution waves.
+   All findings in the same wave have no inter-dependencies and can be migrated simultaneously
+   by parallel Migrator agents.  Maximum **6 findings per wave** (parallel agent cap).
+   A finding enters a wave only when all of its dependencies are in a completed prior wave.
+
+4. **Emit `MigrationExecutionPlan`** — The planner's output document, stored on
+   `MigrationSessionState.execution_plan` and persisted to Redis.  Contains:
+   - `waves: list[list[finding_id]]` — ordered parallel batches
+   - `finding_plans: dict[finding_id → MigrationPlan]` — what to change and how
+   - `finding_meta: dict[finding_id → FindingMeta]` — where to change it
+     (file path, language, line range, description, dependency list)
+
+5. **Guaranteed handoff fields** — Planner injects `transformation_hints["source_algorithm"]`
+   deterministically from `finding.algorithm.value` before storing each plan.
+   Migrator relies on this key for few-shot retrieval and must not need to re-derive it.
+
+**NIST target mapping (prompt context only — LLM reasons freely, not hard-coded rules):**
 ```
 RSA  (any usage)   → ML-DSA (Dilithium)   FIPS 204
 ECDSA, DSA, DH     → ML-DSA (Dilithium)   FIPS 204
 ECDH               → ML-KEM (Kyber)       FIPS 203
 AES-128, DES, 3DES → AES-256              NIST SP 800-131A
-Unknown            → LLM reasons freely   (no pre-set target)
-Non-Python         → manual_only          (detection report only)
+Unknown            → LLM reasons freely
 ```
 
 **LangGraph node:** `planner_node(state: MigrationSessionState) → MigrationSessionState`
-- Calls `LLMClient` for every Python finding; parses structured JSON `MigrationPlan` from response
-- Routes directly to `migrator_node` per finding
+- Resume-safe: if `state.execution_plan` is already set, returns immediately (no LLM call)
+- Also exposes `run_planner(findings, session_id, target_path)` for CLI `--auto` path
 
-**Depends on:** Classifier output (list[CryptoFinding]), LLM Client, Session (Redis), training_data/
+**Depends on:** Classifier output (`list[CryptoFinding]`), LLM Client, Session (Redis), `training_data/`
 
 ---
 

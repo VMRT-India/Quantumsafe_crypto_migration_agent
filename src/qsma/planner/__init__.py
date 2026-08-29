@@ -3,12 +3,27 @@ qsma.planner
 ============
 LangGraph node: planner_node
 
-Receives selected CryptoFindings from MigrationSessionState and produces a
-MigrationPlan for each finding by calling the LLM.
+Responsibilities
+----------------
+1. For every selected CryptoFinding (any language), call the LLM to produce
+   a MigrationPlan — what algorithm to migrate to, what dependencies change,
+   and transformation hints for the Migrator.
 
-Entry point for the LangGraph agent graph (src/qsma/agent/graph.py).
-Direct usage (outside LangGraph, e.g. CLI --auto) is also supported via
-run_planner().
+2. Determine dependency-safe execution order via topological sort of the
+   finding dependency sub-graph.  High blast-radius findings (many things
+   depend on them) must be migrated BEFORE their dependents, so that by the
+   time a dependent module is migrated all of its crypto dependencies are
+   already quantum-safe.
+
+3. Pack the topo-sorted findings into parallel execution waves.  Findings
+   in the same wave have no inter-dependencies and can be migrated
+   simultaneously.  Max 6 findings per wave (parallel agent cap).
+
+4. Emit a MigrationExecutionPlan — the complete structured output of the
+   planner stage and the direct input to the migrator stage.  Contains:
+     - waves: ordered list of parallel batches (list[list[finding_id]])
+     - finding_plans: finding_id → MigrationPlan
+     - finding_meta: finding_id → FindingMeta (file, language, lines, deps)
 
 ADR-002: All migration logic is LLM-agentic — no deterministic rewrite path.
 ADR-007: LangGraph for orchestration.
@@ -18,38 +33,38 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import deque
 from pathlib import Path
 from typing import Any
 
 from qsma.llm.client import LLMClient, LLMError
+from qsma.planner.state import PlannerState
 from qsma.utils.models import (
     Algorithm,
     CryptoFinding,
+    FindingMeta,
+    MigrationExecutionPlan,
     MigrationPlan,
-    MigrationSessionState,
     MigrationStatus,
 )
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# NIST target table — provided as context in the LLM prompt, not hard-coded
-# rules (ADR-002).  This mapping is informational for the prompt builder only.
-# ---------------------------------------------------------------------------
+# Max findings that can be processed in parallel within one wave.
+_MAX_PARALLEL = 6
 
-_NIST_TARGET_MAP: dict[str, str] = {
-    Algorithm.RSA:        Algorithm.DILITHIUM,
-    Algorithm.ECDSA:      Algorithm.DILITHIUM,
-    Algorithm.DSA:        Algorithm.DILITHIUM,
-    Algorithm.DH:         Algorithm.DILITHIUM,
-    Algorithm.ECDH:       Algorithm.KYBER,
-    Algorithm.AES_128:    Algorithm.AES_256,
-    Algorithm.DES:        Algorithm.AES_256,
-    Algorithm.TRIPLE_DES: Algorithm.AES_256,
+# NIST target table — informational prompt context only (ADR-002).
+# The LLM reasons freely; this table is injected as guidance, not hard rules.
+_NIST_TARGETS: dict[str, str] = {
+    "RSA":        "ML-DSA (Dilithium)  — FIPS 204",
+    "ECDSA":      "ML-DSA (Dilithium)  — FIPS 204",
+    "DSA":        "ML-DSA (Dilithium)  — FIPS 204",
+    "DH":         "ML-DSA (Dilithium)  — FIPS 204",
+    "ECDH":       "ML-KEM (Kyber)      — FIPS 203",
+    "AES-128":    "AES-256             — NIST SP 800-131A",
+    "DES":        "AES-256             — NIST SP 800-131A",
+    "3DES":       "AES-256             — NIST SP 800-131A",
 }
-
-# Languages supported for automated (LLM) migration.  All others → manual_only.
-_AUTOMATED_LANGUAGES = {"python"}
 
 
 # ---------------------------------------------------------------------------
@@ -58,7 +73,8 @@ _AUTOMATED_LANGUAGES = {"python"}
 
 def _load_system_prompt() -> str:
     prompt_path = (
-        Path(__file__).parent.parent / "llm" / "training_data" / "prompts" / "planner_system.txt"
+        Path(__file__).parent.parent
+        / "llm" / "training_data" / "prompts" / "planner_system.txt"
     )
     if prompt_path.exists():
         return prompt_path.read_text(encoding="utf-8").strip()
@@ -69,7 +85,7 @@ def _load_system_prompt() -> str:
 
 
 def _load_few_shot(algorithm: str) -> list[dict[str, Any]]:
-    """Load few-shot examples for a given source algorithm, if available."""
+    """Load few-shot examples for the given source algorithm, if available."""
     slug_map = {
         "RSA":    "rsa_to_ml_dsa",
         "ECDSA":  "ecdsa_to_ml_dsa",
@@ -91,7 +107,150 @@ def _load_few_shot(algorithm: str) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# Core plan builder
+# Dependency ordering — topological sort + wave packing
+# ---------------------------------------------------------------------------
+
+def _topo_sort_findings(findings: list[CryptoFinding]) -> list[CryptoFinding]:
+    """
+    Return findings in dependency-safe migration order using Kahn's algorithm.
+
+    Edge semantics from DependencyGraph:
+      edges[node_id] = list of node_ids that node_id IMPORTS_FROM (depends on).
+
+    Migration rule: migrate a module BEFORE anything that depends on it.
+    i.e. if auth.py imports crypto.py, migrate crypto.py first so that
+    when auth.py is migrated its dependency is already quantum-safe.
+
+    Within that constraint, sort by descending blast_radius so that
+    high-impact modules are handled earlier.
+
+    If no DependencyGraph data is available (dependency_node_id is None for
+    all findings), fall back to descending blast_radius order.
+    """
+    # Build an index: dependency_node_id → finding
+    node_to_finding: dict[str, CryptoFinding] = {}
+    for f in findings:
+        if f.dependency_node_id:
+            node_to_finding[f.dependency_node_id] = f
+
+    # Build in-degree map within the selected finding set only.
+    # in_degree[fid] = number of other selected findings that fid depends on
+    # (i.e. fid must wait for those to complete before it can be migrated).
+    fid_set = {f.id for f in findings}
+    finding_by_id = {f.id: f for f in findings}
+
+    # For each finding, collect which OTHER finding_ids it depends on
+    # (i.e. the findings whose dependency_node_id appears in this finding's
+    # affected_dependency_node_ids — meaning this finding's module imports them).
+    # We use affected_dependency_node_ids from the finding itself if available,
+    # otherwise we have no edge data and treat all as independent.
+    deps_of: dict[str, list[str]] = {f.id: [] for f in findings}
+
+    for f in findings:
+        for dep_node_id in (f.metadata.get("depends_on_node_ids") or []):
+            dep_finding = node_to_finding.get(dep_node_id)
+            if dep_finding and dep_finding.id in fid_set and dep_finding.id != f.id:
+                deps_of[f.id].append(dep_finding.id)
+
+    in_degree = {fid: len(dep_list) for fid, dep_list in deps_of.items()}
+    # reverse map: who is waiting on fid
+    dependents_of: dict[str, list[str]] = {fid: [] for fid in fid_set}
+    for fid, dep_list in deps_of.items():
+        for dep_fid in dep_list:
+            dependents_of[dep_fid].append(fid)
+
+    # Kahn's algorithm — process nodes with in_degree==0 first,
+    # breaking ties by descending blast_radius
+    queue: deque[str] = deque(
+        sorted(
+            [fid for fid, deg in in_degree.items() if deg == 0],
+            key=lambda fid: finding_by_id[fid].blast_radius,
+            reverse=True,
+        )
+    )
+    ordered: list[CryptoFinding] = []
+
+    while queue:
+        fid = queue.popleft()
+        ordered.append(finding_by_id[fid])
+        ready = []
+        for waiting_fid in dependents_of[fid]:
+            in_degree[waiting_fid] -= 1
+            if in_degree[waiting_fid] == 0:
+                ready.append(waiting_fid)
+        # sort newly-ready by descending blast_radius before adding to queue
+        ready.sort(key=lambda fid: finding_by_id[fid].blast_radius, reverse=True)
+        queue.extend(ready)
+
+    # If there are cycles (shouldn't happen in an import graph but be safe),
+    # append remaining findings sorted by descending blast_radius
+    if len(ordered) < len(findings):
+        remaining_ids = fid_set - {f.id for f in ordered}
+        remaining = sorted(
+            [finding_by_id[fid] for fid in remaining_ids],
+            key=lambda f: f.blast_radius,
+            reverse=True,
+        )
+        ordered.extend(remaining)
+
+    return ordered
+
+
+def _build_waves(
+    ordered: list[CryptoFinding],
+    deps_of: dict[str, list[str]],
+    max_parallel: int = _MAX_PARALLEL,
+) -> list[list[str]]:
+    """
+    Pack topo-sorted findings into parallel execution waves.
+
+    A finding can join the current wave if all its dependencies are already
+    in a completed wave.  Wave size is capped at max_parallel.
+
+    Within each wave, findings that share the same file are sorted by ascending
+    line_start so that edits higher in a file are processed before edits lower
+    in the same file (avoids line-number drift affecting later edits).
+    """
+    # Build a lookup to sort wave members by file + line_start
+    finding_by_id: dict[str, CryptoFinding] = {f.id: f for f in ordered}
+
+    waves: list[list[str]] = []
+    completed: set[str] = set()
+
+    remaining = list(ordered)
+    while remaining:
+        wave_findings: list[CryptoFinding] = []
+        still_waiting: list[CryptoFinding] = []
+
+        for f in remaining:
+            if len(wave_findings) >= max_parallel:
+                still_waiting.append(f)
+                continue
+            # All dependencies must be in completed waves
+            if all(dep in completed for dep in deps_of.get(f.id, [])):
+                wave_findings.append(f)
+            else:
+                still_waiting.append(f)
+
+        if not wave_findings:
+            # No progress possible — remaining have unresolvable deps (cycle guard)
+            wave_findings = still_waiting[:max_parallel]
+            still_waiting = still_waiting[max_parallel:]
+
+        # Sort within wave: by file path then ascending line_start
+        # so top-of-file edits come before bottom-of-file edits in the same file
+        wave_findings.sort(key=lambda f: (str(f.location.file), f.location.line_start))
+
+        wave = [f.id for f in wave_findings]
+        waves.append(wave)
+        completed.update(wave)
+        remaining = still_waiting
+
+    return waves
+
+
+# ---------------------------------------------------------------------------
+# Per-finding LLM plan builder
 # ---------------------------------------------------------------------------
 
 def _build_plan_for_finding(
@@ -100,27 +259,14 @@ def _build_plan_for_finding(
     system_prompt: str,
 ) -> MigrationPlan:
     """
-    Produce a MigrationPlan for one finding.
-
-    - Non-Python findings → manual_only immediately (no LLM call).
-    - Python findings → call LLM; parse JSON response into MigrationPlan.
+    Call the LLM to produce a MigrationPlan for one finding.
+    Works for any language — the LLM sees the snippet and knows the language.
+    Falls back to manual_only only if the LLM call or JSON parse fails.
     """
-    language = (finding.metadata.get("language") or "python").lower()
-
-    # Non-Python: no automated migration in MVP
-    if language not in _AUTOMATED_LANGUAGES:
-        return MigrationPlan(
-            finding_id=finding.id,
-            strategy="manual_only",
-            target_algorithm=Algorithm.UNKNOWN,
-            description=f"Automated migration not supported for language '{language}' in MVP.",
-            estimated_complexity="high",
-            requires_dependency_update=False,
-        )
-
     algorithm_str = finding.algorithm.value
-    suggested_target = _NIST_TARGET_MAP.get(finding.algorithm, Algorithm.UNKNOWN)
+    nist_hint = _NIST_TARGETS.get(algorithm_str, "reason freely using current NIST PQC standards")
     few_shots = _load_few_shot(algorithm_str)
+    language = finding.metadata.get("language") or "unknown"
 
     few_shot_block = ""
     if few_shots:
@@ -130,14 +276,15 @@ def _build_plan_for_finding(
 
     user_msg = (
         f"Finding ID: {finding.id}\n"
+        f"Language: {language}\n"
         f"Algorithm: {algorithm_str}\n"
         f"Usage type: {finding.usage_type}\n"
-        f"Suggested NIST target: {suggested_target}\n"
+        f"NIST suggested target: {nist_hint}\n"
         f"Library: {finding.library or 'unknown'}\n"
-        f"Blast radius (transitive dependents): {finding.blast_radius}\n"
+        f"Blast radius (modules depending on this): {finding.blast_radius}\n"
         f"File: {finding.location.file} "
         f"(lines {finding.location.line_start}–{finding.location.line_end})\n"
-        f"\nCode snippet:\n```python\n{snippet}\n```"
+        f"\nCode snippet:\n```{language}\n{snippet}\n```"
         f"{few_shot_block}\n\n"
         "Produce the migration plan JSON now."
     )
@@ -151,21 +298,29 @@ def _build_plan_for_finding(
         raw = llm.chat(messages)
         data = json.loads(raw)
     except (LLMError, json.JSONDecodeError) as exc:
-        logger.warning("Planner LLM call failed for %s: %s — falling back to manual_only", finding.id, exc)
+        logger.warning(
+            "Planner LLM call failed for %s: %s — falling back to manual_only",
+            finding.id, exc,
+        )
         return MigrationPlan(
             finding_id=finding.id,
             strategy="manual_only",
             target_algorithm=Algorithm.UNKNOWN,
             description=f"LLM call failed: {exc}",
             estimated_complexity="high",
+            transformation_hints={"source_algorithm": algorithm_str},
         )
 
-    # Resolve target_algorithm: prefer LLM response, fall back to NIST table
+    # Resolve target_algorithm: prefer LLM response, fall back to UNKNOWN
     raw_target = data.get("target_algorithm", "")
     try:
         target_alg = Algorithm(raw_target)
     except ValueError:
-        target_alg = Algorithm(suggested_target) if suggested_target != Algorithm.UNKNOWN else Algorithm.UNKNOWN
+        target_alg = Algorithm.UNKNOWN
+
+    hints: dict[str, Any] = data.get("transformation_hints", {})
+    # Always inject source_algorithm — migrator depends on this key for few-shot lookup
+    hints["source_algorithm"] = algorithm_str
 
     return MigrationPlan(
         finding_id=finding.id,
@@ -175,7 +330,7 @@ def _build_plan_for_finding(
         estimated_complexity=data.get("estimated_complexity", "medium"),
         requires_dependency_update=bool(data.get("requires_dependency_update", False)),
         new_dependencies=data.get("new_dependencies", []),
-        transformation_hints=data.get("transformation_hints", {}),
+        transformation_hints=hints,
         affected_dependency_node_ids=(
             [finding.dependency_node_id] if finding.dependency_node_id else []
         ),
@@ -186,24 +341,86 @@ def _build_plan_for_finding(
 # LangGraph node
 # ---------------------------------------------------------------------------
 
-def planner_node(state: MigrationSessionState) -> MigrationSessionState:
+def planner_node(state: PlannerState) -> PlannerState:
     """
-    LangGraph node: plan migrations for all un-planned selected findings.
+    LangGraph node: produce a MigrationExecutionPlan for all selected findings.
 
-    Reads state.selected_findings, skips findings that already have a plan
-    in state.pending_plans, calls the LLM for the rest.
+    Steps:
+      1. Topological sort findings by dependency order (high blast-radius first).
+      2. Pack into parallel waves (max _MAX_PARALLEL per wave).
+      3. Call LLM for each finding to produce a MigrationPlan.
+      4. Build and store MigrationExecutionPlan on state.
+      5. Mirror plans into state.pending_plans and state.migration_order.
     """
+    if state.execution_plan is not None:
+        # Resume path — planner already ran, skip
+        return state
+
     llm = LLMClient()
     system_prompt = _load_system_prompt()
 
-    for finding in state.selected_findings:
-        if finding.id in state.pending_plans:
-            continue  # already planned (resume path)
+    # 1. Topological sort
+    ordered = _topo_sort_findings(state.selected_findings)
 
-        logger.info("Planner: building plan for finding %s (%s)", finding.id, finding.algorithm)
+    # Rebuild deps_of for wave packing
+    node_to_finding = {f.dependency_node_id: f for f in state.selected_findings if f.dependency_node_id}
+    fid_set = {f.id for f in state.selected_findings}
+    deps_of: dict[str, list[str]] = {f.id: [] for f in state.selected_findings}
+    for f in state.selected_findings:
+        for dep_node_id in (f.metadata.get("depends_on_node_ids") or []):
+            dep_finding = node_to_finding.get(dep_node_id)
+            if dep_finding and dep_finding.id in fid_set and dep_finding.id != f.id:
+                deps_of[f.id].append(dep_finding.id)
+
+    # 2. Pack into parallel waves
+    waves = _build_waves(ordered, deps_of)
+
+    # 3. LLM plan for each finding
+    finding_plans: dict[str, MigrationPlan] = {}
+    finding_meta: dict[str, FindingMeta] = {}
+
+    for finding in ordered:
+        logger.info(
+            "Planner: building plan for %s (%s, %s)",
+            finding.id,
+            finding.algorithm.value,
+            finding.metadata.get("language", "unknown"),
+        )
         plan = _build_plan_for_finding(finding, llm, system_prompt)
-        state.pending_plans[finding.id] = plan
-        finding.migration_status = MigrationStatus.SELECTED
+        finding_plans[finding.id] = plan
+
+    # Build meta with order numbers from the wave-sorted sequence
+    order_counter = 1
+    for wave in waves:
+        for fid in wave:
+            f = next(x for x in ordered if x.id == fid)
+            finding_meta[fid] = FindingMeta(
+                finding_id=fid,
+                order=order_counter,
+                file=f.location.file,
+                language=f.metadata.get("language") or "unknown",
+                symbol_name=f.metadata.get("symbol_name") or "",
+                line_start=f.location.line_start,
+                line_end=f.location.line_end,
+                algorithm=f.algorithm.value,
+                description=f.explanation,
+                depends_on=deps_of.get(fid, []),
+            )
+            order_counter += 1
+            f.migration_status = MigrationStatus.IN_PROGRESS
+
+    # 4. Build execution plan
+    exec_plan = MigrationExecutionPlan(
+        session_id=state.session_id,
+        waves=waves,
+        finding_plans=finding_plans,
+        finding_meta=finding_meta,
+    )
+
+    # 5. Store on state
+    state.execution_plan = exec_plan
+    state.pending_plans = finding_plans
+    state.migration_order = [fid for wave in waves for fid in wave]
 
     return state
 
@@ -218,22 +435,15 @@ def run_planner(
     target_path: Path,
     dry_run: bool = False,
     llm: LLMClient | None = None,
-) -> MigrationSessionState:
+) -> PlannerState:
     """
-    Build plans for the given findings and return an initialised
-    MigrationSessionState ready to hand to the migrator.
+    Build a MigrationExecutionPlan for the given findings and return a
+    PlannerState ready to hand off to the Migrator.
     """
-    state = MigrationSessionState(
+    state = PlannerState(
         session_id=session_id,
         target_path=target_path,
         selected_findings=findings,
         dry_run=dry_run,
     )
-    _llm = llm or LLMClient()
-    system_prompt = _load_system_prompt()
-
-    for finding in findings:
-        plan = _build_plan_for_finding(finding, _llm, system_prompt)
-        state.pending_plans[finding.id] = plan
-
-    return state
+    return planner_node(state)
