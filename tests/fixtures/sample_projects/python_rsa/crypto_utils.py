@@ -3,8 +3,9 @@ INTENTIONALLY VULNERABLE — test fixture for qsma detector/migrator tests.
 This file uses RSA-2048 which is quantum-vulnerable (Shor's algorithm).
 DO NOT USE IN PRODUCTION.
 """
-from cryptography.hazmat.primitives.asymmetric import rsa, padding
-from cryptography.hazmat.primitives import hashes, serialization
+
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 
 def generate_rsa_keypair():

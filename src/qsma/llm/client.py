@@ -76,10 +76,10 @@ load_dotenv()
 # Provider constants
 # ---------------------------------------------------------------------------
 
-PROVIDER_WATSONX             = "watsonx"
-PROVIDER_OPENAI_COMPATIBLE   = "openai_compatible"
+PROVIDER_WATSONX = "watsonx"
+PROVIDER_OPENAI_COMPATIBLE = "openai_compatible"
 PROVIDER_ANTHROPIC_COMPATIBLE = "anthropic_compatible"
-PROVIDER_MOCK                = "mock"   # for unit tests
+PROVIDER_MOCK = "mock"  # for unit tests
 
 _VALID_PROVIDERS = {
     PROVIDER_WATSONX,
@@ -91,6 +91,7 @@ _VALID_PROVIDERS = {
 # ---------------------------------------------------------------------------
 # Prompt templates
 # ---------------------------------------------------------------------------
+
 
 def migration_plan_prompt(
     finding_summary: str,
@@ -169,6 +170,7 @@ def code_transform_prompt(
 # LLMClient
 # ---------------------------------------------------------------------------
 
+
 class LLMClient:
     """
     Provider-agnostic LLM client.
@@ -199,10 +201,7 @@ class LLMClient:
         max_tokens: int | None = None,
         temperature: float | None = None,
     ) -> None:
-        self.provider = (
-            provider
-            or os.environ.get("LLM_PROVIDER", PROVIDER_WATSONX)
-        ).lower()
+        self.provider = (provider or os.environ.get("LLM_PROVIDER", PROVIDER_WATSONX)).lower()
 
         if self.provider not in _VALID_PROVIDERS:
             raise ValueError(
@@ -212,7 +211,8 @@ class LLMClient:
 
         self.max_tokens = max_tokens or int(os.environ.get("LLM_MAX_TOKENS", "4096"))
         self.temperature = (
-            temperature if temperature is not None
+            temperature
+            if temperature is not None
             else float(os.environ.get("LLM_TEMPERATURE", "0.2"))
         )
 
@@ -222,9 +222,7 @@ class LLMClient:
             self.base_url = base_url or os.environ.get(
                 "WATSONX_URL", "https://us-south.ml.cloud.ibm.com"
             )
-            self.model = model or os.environ.get(
-                "WATSONX_MODEL", "ibm/granite-34b-code-instruct"
-            )
+            self.model = model or os.environ.get("WATSONX_MODEL", "ibm/granite-34b-code-instruct")
             self.project_id = os.environ.get("WATSONX_PROJECT_ID", "")
         else:
             # openai_compatible or anthropic_compatible
@@ -243,7 +241,7 @@ class LLMClient:
     def _init_watsonx(self) -> Any:
         """Initialize the ibm-watsonx-ai client."""
         try:
-            from ibm_watsonx_ai import APIClient, Credentials  # type: ignore[import]
+            from ibm_watsonx_ai import Credentials  # type: ignore[import]
             from ibm_watsonx_ai.foundation_models import ModelInference  # type: ignore[import]
         except ImportError as exc:
             raise ImportError(
@@ -334,9 +332,9 @@ class LLMClient:
         ------
         LLMError — wraps any provider SDK error with a clean message
         """
-        _model      = model       or self.model
-        _max_tokens = max_tokens  or self.max_tokens
-        _temp       = temperature if temperature is not None else self.temperature
+        _model = model or self.model
+        _max_tokens = max_tokens or self.max_tokens
+        _temp = temperature if temperature is not None else self.temperature
 
         # Mock provider — for unit tests, returns a fixed stub string
         if self.provider == PROVIDER_MOCK:
@@ -436,6 +434,7 @@ class LLMClient:
 # ---------------------------------------------------------------------------
 # Error type
 # ---------------------------------------------------------------------------
+
 
 class LLMError(RuntimeError):
     """Raised when an LLM API call fails. Wraps the underlying provider error."""
