@@ -31,7 +31,7 @@
 
 | File | What it contains |
 |---|---|
-| [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) | **Master source of truth.** 18 sections: product overview, architecture, every module spec, inter-module contracts, task DAG, parallelization plan, 4-person allocation, Git strategy, phases, testing strategy, tech decisions, ADR log, known risks, current status, next tasks. Read before any work. |
+| [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) | **Master source of truth.** 17 sections: product overview, architecture, every module spec, inter-module contracts, task DAG, parallelization plan, Git strategy, phases, testing strategy, tech decisions, ADR log, known risks, current status, next tasks. Read before any work. |
 | [`PROMPT.md`](PROMPT.md) | **Mandatory AI session bootstrap.** Step-by-step orientation checklist, branch table, screenshot workflow, DO-NOT-DO rules, DAG flexibility note, commit message convention, LLM provider reference, security rules, quick-reference table. Read first, every session. |
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | This file. File index + current pipeline architecture + per-branch state. |
 | [`README.md`](README.md) | Project overview, quick-start install and usage, repo structure summary, security rules. |

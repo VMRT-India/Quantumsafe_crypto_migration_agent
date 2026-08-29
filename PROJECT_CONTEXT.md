@@ -5,7 +5,7 @@
 > Every developer and every future AI session MUST read this document before starting work.
 > Do NOT redesign components without updating this document first.
 > Do NOT duplicate functionality described here.
-> When a significant architectural change is necessary, record it in §15 (ADR Log) before implementing it.
+> When a significant architectural change is necessary, record it in §14 (ADR Log) before implementing it.
 
 ---
 
@@ -634,12 +634,12 @@ changes-<name>  →  merge to main  →  push origin main
 3. **No direct commits to `main`** — use a PR from your personal branch.
 4. **Pre-commit hooks** must pass on every commit (`ruff`, `detect-secrets`).
 5. **Never commit `.env`** — run `./scripts/check_secrets.sh` before every push.
-6. **Commit message format is mandatory** — see `PROMPT.md §6` for the full convention.
+6. **Commit message format is mandatory** — see `PROMPT.md §7` for the full convention.
 7. **Architecture/contract changes** must update `PROJECT_CONTEXT.md` in the same commit.
 
 ### Conflict prevention
 
-- Each developer owns a distinct set of modules (see §10) — parallel work rarely touches the same file.
+- Each developer works on separate modules (see §9 parallelization plan) — parallel work rarely touches the same file.
 - `src/qsma/utils/models.py` is a shared contract file — any change requires a PR reviewed by all.
 - `pyproject.toml` dependencies — communicate additions in the team channel before adding.
 - Before starting work each session, rebase on latest `main`: `git fetch origin && git rebase origin/main`.
@@ -1016,7 +1016,7 @@ beyond the Markdown report format.
 |---|---|---|
 | libcst transformation accuracy for edge cases | High | Comprehensive test fixtures; fallback to LLM path |
 | pqcrypto / oqs-python library availability and API stability | Medium | Abstract behind Migrator — swap library without changing interface |
-| watsonx.ai API rate limits / latency during demo | Medium | LLM path is optional; deterministic path always works |
+| watsonx.ai API rate limits / latency during demo | Medium | Mock LLM provider available for offline testing; cache scan results so migration can retry without re-scanning |
 | NIST PQC library not yet in Python stdlib | Medium | Use `liboqs-python` (Open Quantum Safe project) for Kyber/Dilithium |
 | Complex crypto usage patterns not covered by rules | Medium | LLM fallback + clear "manual review required" output |
 | Test fixture crypto code triggers static analysis warnings | Low | Document fixtures as intentionally vulnerable |
