@@ -77,7 +77,52 @@ to reflect what that branch has implemented.
 
 ---
 
-## Step 4 — What you must NOT do
+## Step 4 — Screenshot your session (required)
+
+At the end of every Bob session, **take a screenshot and add it to your folder**.
+
+```
+bob_sessions/<YourName>/YYYY-MM-DD_HH-MM_<brief-description>.png
+```
+
+### Workflow (every session, every developer)
+
+```bash
+# 1. Make sure you are on your personal branch
+git checkout changes-<YourName>
+
+# 2. Drop your screenshot into your folder
+#    (right-click the Bob chat session info panel → Save Image, or drag to folder)
+
+# 3. Commit it
+git add bob_sessions/<YourName>/<screenshot>.png
+git commit -m "docs(bob_sessions): <YourName> — <brief description of session work>"
+
+# 4. Push your branch
+git push origin changes-<YourName>
+
+# 5. Merge to main
+git checkout main
+git merge --ff-only changes-<YourName>
+git push origin main
+```
+
+### Why this matters
+
+The IBM Dev Day Hackathon requires **evidence of each team member's individual
+contribution**. Screenshots of Bob sessions are that evidence.
+A session with no screenshot is a session that cannot be counted.
+
+### Rules
+
+- No credentials or sensitive data visible — blur/crop before saving.
+- Name files with date + time + brief description so judges can follow the sequence.
+- Add to **your own folder only** (`bob_sessions/Maruti/`, `bob_sessions/Samik/`, etc.).
+- Commit on **your personal branch first**, then merge to `main`.
+
+---
+
+## Step 5 — What you must NOT do
 
 - **Do not redesign the pipeline** without adding an ADR to `PROJECT_CONTEXT.md §15` first.
 - **Do not redefine data models** in individual modules — only `src/qsma/utils/models.py`.
@@ -89,7 +134,7 @@ to reflect what that branch has implemented.
 
 ---
 
-## Step 5 — The DAG and initial files are provisional, not fixed
+## Step 6 — The DAG and initial files are provisional, not fixed
 
 The task dependency graph (`PROJECT_CONTEXT.md §8–9`) and the stub files created in
 Phase 0 are **starting points, not permanent fixtures**.
@@ -111,7 +156,7 @@ Even those can change — but need an explicit superseding ADR before implementa
 
 ---
 
-## Step 6 — Commit message rules
+## Step 7 — Commit message rules
 
 **Git is the changelog.** No separate CHANGELOG file is maintained.
 Every commit message must be precise enough that a developer reading `git log`
@@ -203,7 +248,7 @@ or make a technology decision — update `PROJECT_CONTEXT.md` in the same commit
 
 ---
 
-## Step 7 — LLM provider
+## Step 8 — LLM provider
 
 The LLM client (`src/qsma/llm/`) uses an **OpenAI-compatible Chat Completions API**.
 
@@ -232,7 +277,7 @@ deterministic — they never call the LLM.
 
 ---
 
-## Step 8 — Data storage and caching
+## Step 9 — Data storage and caching
 
 This tool is **stateless by default**. It reads source files from disk, runs
 the pipeline in memory, and produces output. There is no database.
@@ -249,7 +294,7 @@ A changed file invalidates only that file's findings, not the entire scan.
 
 ---
 
-## Step 9 — Security rules
+## Step 10 — Security rules
 
 1. `.env` is never committed — `git status` before every push.
 2. API keys go in `.env` only — never in source, never in comments, never in tests.
@@ -260,7 +305,7 @@ A changed file invalidates only that file's findings, not the entire scan.
 
 ---
 
-## Step 10 — Quick reference
+## Step 11 — Quick reference
 
 | Question | Where to look |
 |---|---|
@@ -272,11 +317,12 @@ A changed file invalidates only that file's findings, not the entire scan.
 | Which branch is mine? | `PROJECT_CONTEXT.md §11` |
 | What LLM provider is configured? | `.env` → `LLM_MODEL`, `LLM_BASE_URL` |
 | What env vars are needed? | `.env.example` |
-| How to write commit messages? | `PROMPT.md §6` (this file) |
-| Can I change the DAG? | Yes — see `PROMPT.md §5` |
-| Can I change `models.py`? | Yes, with PR + ADR — see `PROMPT.md §5` |
-| Is there a database? | No — see `PROMPT.md §8` |
-| Is there caching? | JSON cache on disk — see `PROMPT.md §8` |
+| How to write commit messages? | `PROMPT.md §7` (this file) |
+| Can I change the DAG? | Yes — see `PROMPT.md §6` |
+| Can I change `models.py`? | Yes, with PR + ADR — see `PROMPT.md §6` |
+| Is there a database? | No — see `PROMPT.md §9` |
+| Is there caching? | JSON cache on disk — see `PROMPT.md §9` |
+| Where do session screenshots go? | `bob_sessions/<YourName>/` — see `PROMPT.md §4` |
 
 ---
 
