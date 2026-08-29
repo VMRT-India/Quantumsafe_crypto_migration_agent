@@ -24,28 +24,27 @@ It contains:
 | §5–6 | Every module, its responsibility, inputs, outputs, interfaces |
 | §7 | Inter-module data contracts (`models.py` schemas) |
 | §8–9 | Task dependency DAG and parallelization plan |
-| §10 | 4-developer work allocation |
-| §11 | Git branching strategy and branch ownership |
-| §12 | Development phases and definitions of done |
-| §13 | Testing strategy |
-| §14 | Technology decisions (LLM provider, libraries, DB/cache policy) |
-| §15 | Architectural Decision Log — ADRs that must not be casually overridden |
-| §16 | Known risks |
-| §17 | **Current status — what has actually been implemented** |
-| §18 | **Next tasks — what to work on right now** |
+| §10 | Git branching strategy |
+| §11 | Development phases and definitions of done |
+| §12 | Testing strategy |
+| §13 | Technology decisions (LLM provider, libraries, DB/cache policy) |
+| §14 | Architectural Decision Log — ADRs that must not be casually overridden |
+| §15 | Known risks |
+| §16 | **Current status — what has actually been implemented** |
+| §17 | **Next tasks — what to work on right now** |
 
 ---
 
 ## Step 2 — Orientation checklist (answer before starting)
 
 - [ ] What **branch** am I on? Does it match my developer branch (`changes-Maruti` etc.)?
-- [ ] What is the **current development phase**? (§12 / §17)
-- [ ] What is the **assigned task** for this session? (§18 / §10)
+- [ ] What is the **current development phase**? (§11 / §16)
+- [ ] What is the **assigned task** for this session? (§17)
 - [ ] What **upstream contracts** does this module consume? (§7 + `src/qsma/utils/models.py`)
 - [ ] What **downstream modules** consume what I produce? (§8 DAG)
-- [ ] Are there **ADRs** (§15) that constrain my approach?
-- [ ] What has **already been implemented**? (§17)
-- [ ] Does the **architecture state** for my branch in §11 match what I see on disk?
+- [ ] Are there **ADRs** (§14) that constrain my approach?
+- [ ] What has **already been implemented**? (§16)
+- [ ] Does the **architecture state** for my branch match `ARCHITECTURE.md`?
 
 ---
 
@@ -124,7 +123,7 @@ A session with no screenshot is a session that cannot be counted.
 
 ## Step 5 — What you must NOT do
 
-- **Do not redesign the pipeline** without adding an ADR to `PROJECT_CONTEXT.md §15` first.
+- **Do not redesign the pipeline** without adding an ADR to `PROJECT_CONTEXT.md §14` first.
 - **Do not redefine data models** in individual modules — only `src/qsma/utils/models.py`.
 - **Do not add a module** that duplicates an existing module's responsibility.
 - **Do not hardcode any credentials** — not in code, not in comments, not in tests.
@@ -144,10 +143,10 @@ Phase 0 are **starting points, not permanent fixtures**.
 | Item | How to change it |
 |---|---|
 | Task IDs / task breakdown in the DAG | Update §8 and §9 in `PROJECT_CONTEXT.md`; commit with `arch:` type |
-| Module split/merge | Write an ADR (§15), update §5–6, update `models.py` if contracts change |
+| Module split/merge | Write an ADR (§14), update §5–6, update `models.py` if contracts change |
 | `models.py` data schemas | PR with all developers reviewing; add ADR entry |
-| Technology choices (LLM provider, libraries) | Write an ADR (§15); update §14 |
-| Phase definitions and scope | Update §12; note what changed and why |
+| Technology choices (LLM provider, libraries) | Write an ADR (§14); update §13 |
+| Phase definitions and scope | Update §11; note what changed and why |
 | Stub files in `src/qsma/` | Skeletons — replace entirely with real implementations |
 | Test fixtures | Add/modify freely; keep them clearly labelled as intentionally vulnerable |
 
@@ -210,7 +209,7 @@ Previously Detector produced CryptoFinding directly, conflating
 detection and classification. CryptoHit is now the raw detection
 output; CryptoFinding is the classified result.
 
-See ADR-006 in PROJECT_CONTEXT.md §15.
+See ADR-006 in PROJECT_CONTEXT.md §14.
 Breaking: Classifier now consumes list[CryptoHit], not raw nodes.
 ```
 
@@ -226,7 +225,7 @@ arch: ADR-006 — split CryptoHit from CryptoFinding
 
 Detection and classification were conflated in original design.
 Splitting produces cleaner module boundaries and independent tests.
-PROJECT_CONTEXT.md §15 updated in this commit.
+PROJECT_CONTEXT.md §14 updated in this commit.
 ```
 
 ### Bad commit messages (never use)
@@ -312,12 +311,12 @@ A changed file invalidates only that file's findings, not the entire scan.
 | What files exist and what do they contain? | `ARCHITECTURE.md` — file index |
 | What is the current architecture? | `ARCHITECTURE.md` — pipeline diagram |
 | What is implemented on each branch right now? | `ARCHITECTURE.md` — branch state table |
-| Full module specs, DAG, task allocation? | `PROJECT_CONTEXT.md §4–10` |
+| Full module specs, DAG, parallelization plan? | `PROJECT_CONTEXT.md §4–9` |
 | What does module X do? | `PROJECT_CONTEXT.md §6.X` |
 | What data does module X produce/consume? | `PROJECT_CONTEXT.md §7` + `src/qsma/utils/models.py` |
-| What task to work on? | `PROJECT_CONTEXT.md §17–18` |
-| What ADRs constrain me? | `PROJECT_CONTEXT.md §15` |
-| Which branch is mine? | `PROJECT_CONTEXT.md §11` |
+| What task to work on? | `PROJECT_CONTEXT.md §17` |
+| What ADRs constrain me? | `PROJECT_CONTEXT.md §14` |
+| Which branch is mine? | `PROJECT_CONTEXT.md §10` |
 | What LLM provider is configured? | `.env` → `LLM_MODEL`, `LLM_BASE_URL` |
 | What env vars are needed? | `.env.example` |
 | How to write commit messages? | `PROMPT.md §7` (this file) |

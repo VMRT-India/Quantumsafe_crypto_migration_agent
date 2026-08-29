@@ -20,15 +20,14 @@
 7. [Inter-Module Contracts](#7-inter-module-contracts)
 8. [Dependency Graph (DAG)](#8-dependency-graph-dag)
 9. [Parallelization Plan](#9-parallelization-plan)
-10. [Four-Person Work Allocation](#10-four-person-work-allocation)
-11. [Git Branching Strategy](#11-git-branching-strategy)
-12. [Development Phases](#12-development-phases)
-13. [Testing Strategy](#13-testing-strategy)
-14. [Technology Decisions](#14-technology-decisions)
-15. [Architectural Decision Log (ADR)](#15-architectural-decision-log-adr)
-16. [Known Risks](#16-known-risks)
-17. [Current Status](#17-current-status)
-18. [Next Tasks](#18-next-tasks)
+10. [Git Branching Strategy](#10-git-branching-strategy)
+11. [Development Phases](#11-development-phases)
+12. [Testing Strategy](#12-testing-strategy)
+13. [Technology Decisions](#13-technology-decisions)
+14. [Architectural Decision Log (ADR)](#14-architectural-decision-log-adr)
+15. [Known Risks](#15-known-risks)
+16. [Current Status](#16-current-status)
+17. [Next Tasks](#17-next-tasks)
 
 ---
 
@@ -541,33 +540,7 @@ Detailed JSON schemas for each are in `docs/contracts/`.
 
 ---
 
-## 10. Four-Person Work Allocation
-
-### Phase 1 (Foundation + Core Detection)
-
-| Branch | Primary tasks | Notes |
-|---|---|---|
-| `changes-Maruti` | T-01 (Models), T-02 (Ingestion), T-03 (Analyzer) | Pipeline foundation — sequential |
-| `changes-Samik` | T-07 (LLM Client), T-08 (Planner), T-10 (LLM Migration) | IBM watsonx integration |
-| `changes-Navya` | T-05 (Pattern library), T-04 (Detector), T-06 (Classifier) | Crypto knowledge workstream |
-| `changes-Palak` | T-14 (Test fixtures), T-12 (Reporter), T-11 (Validator) | Test infra + output layer |
-
-### Phase 2 (Migration + Integration)
-
-| Branch | Primary tasks |
-|---|---|
-| `changes-Maruti` | T-09 (Deterministic Migrator transforms) |
-| `changes-Samik` | T-10 (LLM-assisted migration path) |
-| `changes-Navya` | T-16, T-17 (Detector+Classifier unit/integration tests) |
-| `changes-Palak` | T-13 (CLI wiring), T-15 (Ingestion+Analyzer tests) |
-
-### Phase 3 (Hardening + Demo)
-
-All branches: T-18 (migration integration tests), T-19 (end-to-end), demo polish, README.
-
----
-
-## 11. Git Branching Strategy
+## 10. Git Branching Strategy
 
 ### Branch structure
 
@@ -624,7 +597,7 @@ needing to inspect the code.
 
 ---
 
-## 12. Development Phases
+## 11. Development Phases
 
 ### Phase 0 — Foundation (current) ✅
 
@@ -689,7 +662,7 @@ needing to inspect the code.
 
 ---
 
-## 13. Testing Strategy
+## 12. Testing Strategy
 
 ### Layers
 
@@ -719,7 +692,7 @@ A migration test passes only when:
 
 ---
 
-## 14. Technology Decisions
+## 13. Technology Decisions
 
 | Technology | Purpose | Decision rationale |
 |---|---|---|
@@ -789,7 +762,7 @@ NOT used for:
 
 ---
 
-## 15. Architectural Decision Log (ADR)
+## 14. Architectural Decision Log (ADR)
 
 > Record every significant architectural decision here before implementing it.
 > Future AI sessions and developers MUST NOT casually change these decisions.
@@ -849,7 +822,7 @@ beyond the Markdown report format.
 
 ---
 
-## 16. Known Risks
+## 15. Known Risks
 
 | Risk | Severity | Mitigation |
 |---|---|---|
@@ -863,7 +836,7 @@ beyond the Markdown report format.
 
 ---
 
-## 17. Current Status
+## 16. Current Status
 
 **Phase:** 0 — Foundation
 
@@ -889,26 +862,29 @@ beyond the Markdown report format.
 
 ---
 
-## 18. Next Tasks
+## 17. Next Tasks
 
-The immediate next steps after Phase 0 review:
+The immediate next tasks to begin Phase 1:
 
-1. **Team:** Review and agree on `models.py` — this is the contract all modules depend on.
-   If changes are needed, make them NOW before parallel development starts.
+1. **Review `models.py`** — the inter-module contracts must be agreed before parallel
+   development starts. If changes are needed, make them before any module implements
+   against the schema.
 
-2. **`changes-Maruti`**: Implement `qsma.ingestion` (T-02) and `qsma.analyzer` (T-03).
-   Start with `CodebaseSnapshot` and `IngestionConfig`.
+2. **T-02 Ingestion** — implement `qsma.ingestion`: file walker, `CodebaseSnapshot`,
+   `IngestionConfig`. Start here — everything downstream depends on it.
 
-3. **`changes-Samik`**: Implement `qsma.llm` client wrapper (T-07).
-   Ensure it mocks cleanly in tests — watsonx credentials not required for unit tests.
+3. **T-07 LLM Client** — implement `qsma.llm` client wrapper. Can start in parallel
+   with T-02. Ensure it mocks cleanly — no real credentials needed for unit tests.
 
-4. **`changes-Navya`**: Define the detection rule schema in `qsma.detector.patterns` (T-05).
-   Build the risk table in `qsma.classifier` (part of T-06).
+4. **T-05 Detector pattern library** — define detection rule schema in
+   `qsma.detector.patterns`. Can start in parallel with T-02 and T-07.
 
-5. **`changes-Palak`**: Implement `qsma.reporter` (T-12) against the existing `CryptoFinding` schema.
-   Create sample project fixtures in `tests/fixtures/` (T-14).
+5. **T-12 Reporter** — implement `qsma.reporter` against the existing `CryptoFinding`
+   schema. Can start immediately — only depends on `models.py` (T-01, done).
 
-**Phase 1 integration checkpoint:** When `changes-Maruti` completes Analyzer, schedule a 30-min
-integration session to wire Ingestion → Analyzer → Detector (stub) and verify the
-data contracts hold in practice.
+6. **T-14 Test fixtures** — expand `tests/fixtures/` with additional sample projects
+   covering more crypto patterns. Can start immediately.
+
+**Phase 1 integration checkpoint:** Once T-02 (Ingestion) and T-03 (Analyzer) are
+complete, wire Ingestion → Analyzer → Detector stub and verify data contracts hold.
 
