@@ -120,4 +120,3 @@ tests/samples/real_*
 .qsma_cache/
 
 # bob_sessions/ — session screenshots, always committed (required for hackathon submission)
-
