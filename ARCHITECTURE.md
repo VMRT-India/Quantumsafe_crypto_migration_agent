@@ -256,7 +256,7 @@ and update the branch row to `synced to main`.
 | Branch | Phase | Ahead of main | Currently implementing | Notes |
 |---|---|---|---|---|
 | `main` | 0 | — | nothing (foundation complete) | CLI stub, models, LLM client, test fixtures |
-| `changes-Maruti` | 0 | 2 commits | nothing yet | bob_sessions screenshot + PROMPT.md update |
+| `changes-Maruti` | 1→2 | +planner+migrator | — | `MigrationSessionState` added to models.py; `planner/__init__.py` (planner_node, run_planner); `migrator/__init__.py` (migrator_node, run_migrator); `migrator/patcher.py` (apply_patch); `migrator/llm_transform.py` (build_transform_messages, call_llm_transform); planner/migrator system prompts written; unit tests: test_planner.py, test_migrator.py |
 | `changes-Samik` | 0 | synced | nothing yet | — |
 | `changes-Navya` | 0 | synced | nothing yet | — |
 | `changes-Palak` | 0 | synced | nothing yet | — |

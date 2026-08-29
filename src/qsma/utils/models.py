@@ -279,3 +279,48 @@ class ScanReport(BaseModel):
     scan_duration_seconds: float = 0.0
     # Dependency graph summary for display in the scan report
     dependency_graph: DependencyGraph | None = None
+
+
+# ---------------------------------------------------------------------------
+# Agent session state  (LangGraph state persisted to Redis)
+# ---------------------------------------------------------------------------
+
+class MigrationSessionState(BaseModel):
+    """
+    Shared state threaded through the LangGraph agent graph
+    (planner_node → migrator_node → validator_node).
+
+    Persisted to Redis after every node transition so the session can be
+    resumed with `qsma migrate --resume <session_id>`.
+
+    Produced/consumed by: Planner, Migrator, Validator
+    Persisted by: utils/session.py (Redis, TTL 24 h)
+    """
+    session_id: str
+    target_path: Path
+
+    # ── Input findings ────────────────────────────────────────────────────
+    # Full list of findings selected by the user (or --auto) for migration.
+    selected_findings: list[CryptoFinding] = Field(default_factory=list)
+
+    # ── Planner outputs ───────────────────────────────────────────────────
+    # Plans produced so far; keyed by finding_id for easy lookup.
+    # Appended by planner_node; read by migrator_node.
+    pending_plans: dict[str, MigrationPlan] = Field(default_factory=dict)
+
+    # ── Migrator / Validator tracking ────────────────────────────────────
+    completed_findings: list[str] = Field(default_factory=list)    # finding_id list
+    failed_findings: list[str] = Field(default_factory=list)       # finding_id list
+
+    # Current finding being processed (one at a time through the loop)
+    current_finding_id: str | None = None
+    retry_count: int = 0                    # attempts for current finding
+    retry_hints: dict[str, Any] = Field(default_factory=dict)      # from Validator
+
+    # Accumulated transformation results
+    transformation_results: list[TransformationResult] = Field(default_factory=list)
+
+    # ── Control ───────────────────────────────────────────────────────────
+    dry_run: bool = False                   # True → diff only, no file writes
+    # Routing signal set by validator_node: "pass" | "retry" | "escalate" | "done"
+    routing_signal: str = "pass"
