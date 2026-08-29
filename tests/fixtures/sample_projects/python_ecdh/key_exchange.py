@@ -3,12 +3,13 @@ INTENTIONALLY VULNERABLE — test fixture for qsma detector/migrator tests.
 This file uses ECDH over SECP256R1 which is quantum-vulnerable (Shor's algorithm).
 DO NOT USE IN PRODUCTION.
 """
+
+from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric.ec import (
     ECDH,
-    generate_private_key,
     SECP256R1,
+    generate_private_key,
 )
-from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 

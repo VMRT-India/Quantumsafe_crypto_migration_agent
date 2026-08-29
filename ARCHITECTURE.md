@@ -18,9 +18,9 @@
 
 ## Current state on `main`
 
-**Phase:** 0 — Foundation complete  
-**Last updated:** 2025-08-29  
-**What is implemented:** Repo skeleton, shared contracts, stub CLI, LLM client, test fixtures.  
+**Phase:** 0 — Foundation complete
+**Last updated:** 2025-08-29
+**What is implemented:** Repo skeleton, shared contracts, stub CLI, LLM client, test fixtures.
 **What is NOT yet implemented:** All pipeline module logic (ingestion through reporter are empty stubs).
 
 ---
@@ -247,7 +247,7 @@ Inter-module data contracts (all defined in src/qsma/utils/models.py):
 
 ## Per-branch architecture state
 
-**AI rule:** When you implement anything on your branch, update your row here in the same commit.  
+**AI rule:** When you implement anything on your branch, update your row here in the same commit.
 Format: `feat(<module>): implement X — updates ARCHITECTURE.md branch state`
 
 When merging into `main`: update the `main` row to include the newly merged module,

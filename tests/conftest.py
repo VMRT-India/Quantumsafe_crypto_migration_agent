@@ -1,6 +1,7 @@
 """
 Shared pytest fixtures for the Quantum-Safe Crypto Migration Agent test suite.
 """
+
 from __future__ import annotations
 
 import textwrap

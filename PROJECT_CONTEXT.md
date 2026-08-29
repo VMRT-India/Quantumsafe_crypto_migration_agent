@@ -1271,4 +1271,3 @@ The immediate next tasks to begin Phase 1:
 
 **Phase 1 integration checkpoint:** Once T-02 (Ingestion) and T-03 (Analyzer) are
 complete, wire Ingestion → Analyzer → Detector stub and verify data contracts hold.
-
