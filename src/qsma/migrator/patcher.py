@@ -75,11 +75,7 @@ def apply_patch(
     replacement_lines = _normalise_lines(replacement_code)
 
     # Splice: keep lines before + replacement + lines after
-    patched_lines = (
-        original_lines[: line_start - 1]
-        + replacement_lines
-        + original_lines[line_end:]
-    )
+    patched_lines = original_lines[: line_start - 1] + replacement_lines + original_lines[line_end:]
     patched_source = "".join(patched_lines)
 
     # Validate that the patched result is valid Python syntax
@@ -126,6 +122,7 @@ def apply_patch(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _normalise_lines(code: str) -> list[str]:
     """Split code into lines preserving newlines; ensure final newline."""

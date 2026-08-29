@@ -20,7 +20,6 @@ from pydantic import BaseModel, Field
 
 from qsma.utils.models import (
     CryptoFinding,
-    MigrationPlan,
     TransformationResult,
     ValidationResult,
 )
@@ -36,26 +35,29 @@ class ValidatorState(BaseModel):
     Produced by: Migrator  (migrator_node fills all fields before handing off)
     Consumed by: validator_node
     """
+
     # ── Session identity ─────────────────────────────────────────────────
-    session_id: str                                 # (validator reads)
-    target_path: Path                               # (validator reads) — where to run pytest
+    session_id: str  # (validator reads)
+    target_path: Path  # (validator reads) — where to run pytest
 
     # ── Finding context ───────────────────────────────────────────────────
     # Full list of selected findings — validator looks up by current_finding_id
-    findings: list[CryptoFinding] = Field(default_factory=list)   # (validator reads)
-    current_finding_id: str | None = None           # (validator reads)
+    findings: list[CryptoFinding] = Field(default_factory=list)  # (validator reads)
+    current_finding_id: str | None = None  # (validator reads)
 
     # ── Retry control ─────────────────────────────────────────────────────
-    current_attempt: int = 0                        # (validator reads + writes)
-    max_attempts: int = 3                           # (validator reads)
-    retry_hints: str | None = None                  # (validator writes on failure)
+    current_attempt: int = 0  # (validator reads + writes)
+    max_attempts: int = 3  # (validator reads)
+    retry_hints: str | None = None  # (validator writes on failure)
 
     # ── Transformation input ──────────────────────────────────────────────
     # Results from the Migrator — validator checks files_modified for syntax
-    transformation_results: list[TransformationResult] = Field(default_factory=list)  # (validator reads)
+    transformation_results: list[TransformationResult] = Field(
+        default_factory=list
+    )  # (validator reads)
 
     # ── Validation output ─────────────────────────────────────────────────
-    validation_results: list[ValidationResult] = Field(default_factory=list)          # (validator writes)
+    validation_results: list[ValidationResult] = Field(default_factory=list)  # (validator writes)
 
     # ── Control ───────────────────────────────────────────────────────────
-    is_dry_run: bool = False                        # (validator reads) — skip validation if True
+    is_dry_run: bool = False  # (validator reads) — skip validation if True

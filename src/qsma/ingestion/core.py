@@ -84,15 +84,12 @@ def _walk_files(root: Path, config: IngestionConfig) -> Iterator[Path]:
                 continue
 
             # Check extensions
-            if (
-                config.allowed_extensions
-                and file_path.suffix.lower() not in config.allowed_extensions
-            ):
+            if config.extensions and file_path.suffix.lower() not in config.extensions:
                 continue
 
             # Check size
             try:
-                if file_path.stat().st_size > config.max_file_size_bytes:
+                if file_path.stat().st_size > config.max_file_size:
                     logger.debug(f"Skipping large file: {file_path}")
                     continue
             except OSError:

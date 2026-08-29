@@ -12,7 +12,6 @@ the module boundary into the Validator.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -30,6 +29,7 @@ class MigratorState(BaseModel):
     Consumed by: migrator_node
     Output:      transformation_results  →  stored in MigrationSessionState for the Validator
     """
+
     session_id: str
     target_path: Path
 
@@ -41,15 +41,15 @@ class MigratorState(BaseModel):
 
     # Per-finding tracking
     current_finding_id: str | None = None
-    retry_count: int = 0                        # attempts on current finding (reset per finding)
-    retry_hints: str | None = None              # plain-text hints from Validator on retry
+    retry_count: int = 0  # attempts on current finding (reset per finding)
+    retry_hints: str | None = None  # plain-text hints from Validator on retry
 
     # Completion tracking
-    completed_findings: list[str] = Field(default_factory=list)   # finding_ids done
-    failed_findings: list[str] = Field(default_factory=list)       # finding_ids escalated
+    completed_findings: list[str] = Field(default_factory=list)  # finding_ids done
+    failed_findings: list[str] = Field(default_factory=list)  # finding_ids escalated
 
     # Output: accumulated results — handed off to Validator when done
     transformation_results: list[TransformationResult] = Field(default_factory=list)
 
     # Routing signal for agent/graph.py
-    routing_signal: str = "pass"    # "validate" | "escalate" | "done"
+    routing_signal: str = "pass"  # "validate" | "escalate" | "done"

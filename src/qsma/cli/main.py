@@ -155,9 +155,7 @@ def migrate(
                 console.print("[yellow]--auto selected: mocking CRITICAL/HIGH selection[/yellow]")
                 selected_ids = ["QSMA-0001", "QSMA-0002"]
 
-        console.print(
-            f"Selected findings: {', '.join(selected_ids) if selected_ids else 'None'}"
-        )
+        console.print(f"Selected findings: {', '.join(selected_ids) if selected_ids else 'None'}")
         console.print(f"Dry-run mode: {'[yellow]Yes[/yellow]' if dry_run else '[green]No[/green]'}")
 
         if not selected_ids:

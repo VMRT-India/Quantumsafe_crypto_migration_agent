@@ -56,14 +56,14 @@ _MAX_PARALLEL = 6
 # NIST target table — informational prompt context only (ADR-002).
 # The LLM reasons freely; this table is injected as guidance, not hard rules.
 _NIST_TARGETS: dict[str, str] = {
-    "RSA":        "ML-DSA (Dilithium)  — FIPS 204",
-    "ECDSA":      "ML-DSA (Dilithium)  — FIPS 204",
-    "DSA":        "ML-DSA (Dilithium)  — FIPS 204",
-    "DH":         "ML-DSA (Dilithium)  — FIPS 204",
-    "ECDH":       "ML-KEM (Kyber)      — FIPS 203",
-    "AES-128":    "AES-256             — NIST SP 800-131A",
-    "DES":        "AES-256             — NIST SP 800-131A",
-    "3DES":       "AES-256             — NIST SP 800-131A",
+    "RSA": "ML-DSA (Dilithium)  — FIPS 204",
+    "ECDSA": "ML-DSA (Dilithium)  — FIPS 204",
+    "DSA": "ML-DSA (Dilithium)  — FIPS 204",
+    "DH": "ML-DSA (Dilithium)  — FIPS 204",
+    "ECDH": "ML-KEM (Kyber)      — FIPS 203",
+    "AES-128": "AES-256             — NIST SP 800-131A",
+    "DES": "AES-256             — NIST SP 800-131A",
+    "3DES": "AES-256             — NIST SP 800-131A",
 }
 
 
@@ -71,10 +71,10 @@ _NIST_TARGETS: dict[str, str] = {
 # Prompt loading
 # ---------------------------------------------------------------------------
 
+
 def _load_system_prompt() -> str:
     prompt_path = (
-        Path(__file__).parent.parent
-        / "llm" / "training_data" / "prompts" / "planner_system.txt"
+        Path(__file__).parent.parent / "llm" / "training_data" / "prompts" / "planner_system.txt"
     )
     if prompt_path.exists():
         return prompt_path.read_text(encoding="utf-8").strip()
@@ -87,15 +87,14 @@ def _load_system_prompt() -> str:
 def _load_few_shot(algorithm: str) -> list[dict[str, Any]]:
     """Load few-shot examples for the given source algorithm, if available."""
     slug_map = {
-        "RSA":    "rsa_to_ml_dsa",
-        "ECDSA":  "ecdsa_to_ml_dsa",
-        "ECDH":   "ecdh_to_ml_kem",
+        "RSA": "rsa_to_ml_dsa",
+        "ECDSA": "ecdsa_to_ml_dsa",
+        "ECDH": "ecdh_to_ml_kem",
         "AES-128": "aes128_to_aes256",
     }
     slug = slug_map.get(algorithm, "unknown_pattern")
     few_shot_path = (
-        Path(__file__).parent.parent
-        / "llm" / "training_data" / "few_shot" / f"{slug}.json"
+        Path(__file__).parent.parent / "llm" / "training_data" / "few_shot" / f"{slug}.json"
     )
     if not few_shot_path.exists():
         return []
@@ -109,6 +108,7 @@ def _load_few_shot(algorithm: str) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 # Dependency ordering — topological sort + wave packing
 # ---------------------------------------------------------------------------
+
 
 def _topo_sort_findings(findings: list[CryptoFinding]) -> list[CryptoFinding]:
     """
@@ -147,7 +147,7 @@ def _topo_sort_findings(findings: list[CryptoFinding]) -> list[CryptoFinding]:
     deps_of: dict[str, list[str]] = {f.id: [] for f in findings}
 
     for f in findings:
-        for dep_node_id in (f.metadata.get("depends_on_node_ids") or []):
+        for dep_node_id in f.metadata.get("depends_on_node_ids") or []:
             dep_finding = node_to_finding.get(dep_node_id)
             if dep_finding and dep_finding.id in fid_set and dep_finding.id != f.id:
                 deps_of[f.id].append(dep_finding.id)
@@ -211,9 +211,6 @@ def _build_waves(
     line_start so that edits higher in a file are processed before edits lower
     in the same file (avoids line-number drift affecting later edits).
     """
-    # Build a lookup to sort wave members by file + line_start
-    finding_by_id: dict[str, CryptoFinding] = {f.id: f for f in ordered}
-
     waves: list[list[str]] = []
     completed: set[str] = set()
 
@@ -252,6 +249,7 @@ def _build_waves(
 # ---------------------------------------------------------------------------
 # Per-finding LLM plan builder
 # ---------------------------------------------------------------------------
+
 
 def _build_plan_for_finding(
     finding: CryptoFinding,
@@ -300,7 +298,8 @@ def _build_plan_for_finding(
     except (LLMError, json.JSONDecodeError) as exc:
         logger.warning(
             "Planner LLM call failed for %s: %s — falling back to manual_only",
-            finding.id, exc,
+            finding.id,
+            exc,
         )
         return MigrationPlan(
             finding_id=finding.id,
@@ -341,6 +340,7 @@ def _build_plan_for_finding(
 # LangGraph node
 # ---------------------------------------------------------------------------
 
+
 def planner_node(state: PlannerState) -> PlannerState:
     """
     LangGraph node: produce a MigrationExecutionPlan for all selected findings.
@@ -363,11 +363,13 @@ def planner_node(state: PlannerState) -> PlannerState:
     ordered = _topo_sort_findings(state.selected_findings)
 
     # Rebuild deps_of for wave packing
-    node_to_finding = {f.dependency_node_id: f for f in state.selected_findings if f.dependency_node_id}
+    node_to_finding = {
+        f.dependency_node_id: f for f in state.selected_findings if f.dependency_node_id
+    }
     fid_set = {f.id for f in state.selected_findings}
     deps_of: dict[str, list[str]] = {f.id: [] for f in state.selected_findings}
     for f in state.selected_findings:
-        for dep_node_id in (f.metadata.get("depends_on_node_ids") or []):
+        for dep_node_id in f.metadata.get("depends_on_node_ids") or []:
             dep_finding = node_to_finding.get(dep_node_id)
             if dep_finding and dep_finding.id in fid_set and dep_finding.id != f.id:
                 deps_of[f.id].append(dep_finding.id)
@@ -430,6 +432,7 @@ def planner_node(state: PlannerState) -> PlannerState:
 # ---------------------------------------------------------------------------
 # Convenience entry point for non-LangGraph callers (CLI --auto)
 # ---------------------------------------------------------------------------
+
 
 def run_planner(
     findings: list[CryptoFinding],

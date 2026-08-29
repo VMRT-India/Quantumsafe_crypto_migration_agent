@@ -40,17 +40,16 @@ def _load_system_prompt() -> str:
 def _load_few_shot(plan: MigrationPlan) -> list[dict[str, Any]]:
     """Load few-shot examples relevant to this plan's algorithm pair."""
     slug_map = {
-        "RSA":    "rsa_to_ml_dsa",
-        "ECDSA":  "ecdsa_to_ml_dsa",
-        "ECDH":   "ecdh_to_ml_kem",
+        "RSA": "rsa_to_ml_dsa",
+        "ECDSA": "ecdsa_to_ml_dsa",
+        "ECDH": "ecdh_to_ml_kem",
         "AES-128": "aes128_to_aes256",
     }
     hints = plan.transformation_hints
     src_alg = hints.get("source_algorithm", "")
     slug = slug_map.get(src_alg, "unknown_pattern")
     few_shot_path = (
-        Path(__file__).parent.parent
-        / "llm" / "training_data" / "few_shot" / f"{slug}.json"
+        Path(__file__).parent.parent / "llm" / "training_data" / "few_shot" / f"{slug}.json"
     )
     if not few_shot_path.exists():
         return []
@@ -84,7 +83,9 @@ def build_transform_messages(
     few_shots = _load_few_shot(plan)
     few_shot_block = ""
     if few_shots:
-        few_shot_block = "\n\nFew-shot examples (input→output pairs):\n" + json.dumps(few_shots, indent=2)
+        few_shot_block = "\n\nFew-shot examples (input→output pairs):\n" + json.dumps(
+            few_shots, indent=2
+        )
 
     retry_block = ""
     if retry_hints:
@@ -143,6 +144,7 @@ def call_llm_transform(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _strip_fences(text: str) -> str:
     """Remove leading/trailing ```python ... ``` or ``` ... ``` fences."""

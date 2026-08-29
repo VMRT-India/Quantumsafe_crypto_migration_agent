@@ -24,6 +24,10 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from qsma.planner.state import PlannerState
 
 from qsma.llm.client import LLMClient
 from qsma.migrator.llm_transform import call_llm_transform
@@ -31,7 +35,6 @@ from qsma.migrator.patcher import apply_patch
 from qsma.migrator.state import MigratorState
 from qsma.utils.models import (
     MigrationExecutionPlan,
-    MigrationStatus,
     TransformationResult,
 )
 from qsma.validator.state import ValidatorState
@@ -44,6 +47,7 @@ _MAX_RETRIES = 3
 # ---------------------------------------------------------------------------
 # LangGraph node
 # ---------------------------------------------------------------------------
+
 
 def migrator_node(state: MigratorState) -> MigratorState:
     """
@@ -66,51 +70,68 @@ def migrator_node(state: MigratorState) -> MigratorState:
 
     if not plan:
         logger.error("No plan found for finding %s", finding_id)
-        state.transformation_results.append(TransformationResult(
-            finding_id=finding_id, success=False,
-            error_message="No migration plan available.",
-        ))
+        state.transformation_results.append(
+            TransformationResult(
+                finding_id=finding_id,
+                success=False,
+                error_message="No migration plan available.",
+            )
+        )
         state.routing_signal = "escalate"
         return state
 
     # manual_only — no LLM call
     if plan.strategy == "manual_only":
-        state.transformation_results.append(TransformationResult(
-            finding_id=finding_id, success=False,
-            error_message=f"manual_only: {plan.description}",
-        ))
+        state.transformation_results.append(
+            TransformationResult(
+                finding_id=finding_id,
+                success=False,
+                error_message=f"manual_only: {plan.description}",
+            )
+        )
         state.routing_signal = "escalate"
         return state
 
     # Max retries exceeded
     if state.retry_count >= _MAX_RETRIES:
         logger.warning("Max retries (%d) reached for %s", _MAX_RETRIES, finding_id)
-        state.transformation_results.append(TransformationResult(
-            finding_id=finding_id, success=False,
-            error_message=f"Max retries ({_MAX_RETRIES}) exceeded.",
-            original_snippet=meta.description if meta else None,
-        ))
+        state.transformation_results.append(
+            TransformationResult(
+                finding_id=finding_id,
+                success=False,
+                error_message=f"Max retries ({_MAX_RETRIES}) exceeded.",
+                original_snippet=meta.description if meta else None,
+            )
+        )
         state.failed_findings.append(finding_id)
         state.routing_signal = "escalate"
         return state
 
     # Get original snippet from plan meta or finding hint
-    original_snippet = (meta and (
-        # prefer the actual snippet from the plan hints if available
-        plan.transformation_hints.get("original_snippet") or meta.description
-    )) or ""
+    original_snippet = (
+        meta
+        and (
+            # prefer the actual snippet from the plan hints if available
+            plan.transformation_hints.get("original_snippet") or meta.description
+        )
+    ) or ""
 
     # Call LLM
     llm = LLMClient()
     retry_hints = state.retry_hints if state.retry_count > 0 else None
-    success, transformed = call_llm_transform(plan, original_snippet, llm, {"hint": retry_hints} if retry_hints else None)
+    success, transformed = call_llm_transform(
+        plan, original_snippet, llm, {"hint": retry_hints} if retry_hints else None
+    )
 
     if not success:
-        state.transformation_results.append(TransformationResult(
-            finding_id=finding_id, success=False,
-            original_snippet=original_snippet,
-            error_message=transformed,
-        ))
+        state.transformation_results.append(
+            TransformationResult(
+                finding_id=finding_id,
+                success=False,
+                original_snippet=original_snippet,
+                error_message=transformed,
+            )
+        )
         state.failed_findings.append(finding_id)
         state.routing_signal = "escalate"
         return state
@@ -157,17 +178,18 @@ def migrator_node(state: MigratorState) -> MigratorState:
 # Build ValidatorState — migrator's final output, validator's direct input
 # ---------------------------------------------------------------------------
 
+
 def build_validator_state(
     migrator_state: MigratorState,
-    findings_lookup: dict,   # finding_id → CryptoFinding, from PlannerState.selected_findings
+    findings_lookup: dict[
+        str, Any
+    ],  # finding_id → CryptoFinding, from PlannerState.selected_findings
 ) -> ValidatorState:
     """
     Convert MigratorState into ValidatorState — the exact shape Palak's
     validator_node reads.  Called by agent/graph.py after migrator_node completes
     a finding, or by run_migrator() for the CLI --auto path.
     """
-    from qsma.utils.models import CryptoFinding
-
     return ValidatorState(
         session_id=migrator_state.session_id,
         target_path=migrator_state.target_path,
@@ -186,8 +208,9 @@ def build_validator_state(
 # Convenience entry point (CLI --auto, outside LangGraph)
 # ---------------------------------------------------------------------------
 
+
 def run_migrator(
-    planner_state: "PlannerState",    # type: ignore[name-defined]  — avoid circular import
+    planner_state: PlannerState,
     dry_run: bool = False,
 ) -> tuple[MigratorState, ValidatorState]:
     """
@@ -197,9 +220,9 @@ def run_migrator(
 
     No retry loop here — for retry behaviour use the LangGraph graph.
     """
-    from qsma.planner.state import PlannerState  # local import avoids circular
+    # PlannerState is imported via TYPE_CHECKING at module top; no runtime import needed
 
-    exec_plan: MigrationExecutionPlan = planner_state.execution_plan
+    exec_plan: MigrationExecutionPlan = planner_state.execution_plan  # type: ignore[assignment]
     findings_lookup = {f.id: f for f in planner_state.selected_findings}
 
     state = MigratorState(

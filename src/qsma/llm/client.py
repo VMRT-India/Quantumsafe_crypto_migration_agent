@@ -205,8 +205,7 @@ class LLMClient:
 
         if self.provider not in _VALID_PROVIDERS:
             raise ValueError(
-                f"Unknown LLM_PROVIDER '{self.provider}'. "
-                f"Valid values: {sorted(_VALID_PROVIDERS)}"
+                f"Unknown LLM_PROVIDER '{self.provider}'. Valid values: {sorted(_VALID_PROVIDERS)}"
             )
 
         self.max_tokens = max_tokens or int(os.environ.get("LLM_MAX_TOKENS", "4096"))

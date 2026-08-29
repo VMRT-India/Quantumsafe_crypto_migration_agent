@@ -8,9 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
-from qsma.llm.client import LLMClient, LLMError
+from qsma.llm.client import LLMError
 from qsma.migrator import build_validator_state, migrator_node, run_migrator
 from qsma.migrator.patcher import apply_patch
 from qsma.migrator.state import MigratorState
@@ -25,10 +23,10 @@ from qsma.utils.models import (
     QuantumRisk,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def make_finding(
     id: str = "QSMA-0001",
@@ -134,8 +132,8 @@ TRANSFORMED_CODE = "private_key, public_key = dilithium.generate_keys()\n"
 # migrator_node
 # ---------------------------------------------------------------------------
 
-class TestMigratorNode:
 
+class TestMigratorNode:
     def test_no_current_finding_id_returns_done(self):
         f = make_finding()
         p = make_plan(finding_id=f.id)
@@ -178,9 +176,7 @@ class TestMigratorNode:
     def test_successful_dry_run_routes_validate(self, tmp_path):
         source = tmp_path / "crypto.py"
         source.write_text(
-            "import rsa\n"
-            "private_key = rsa.generate_private_key(65537, 2048)\n"
-            "print('done')\n",
+            "import rsa\nprivate_key = rsa.generate_private_key(65537, 2048)\nprint('done')\n",
             encoding="utf-8",
         )
         finding = make_finding(file=source, line_start=2, line_end=2)
@@ -199,9 +195,7 @@ class TestMigratorNode:
     def test_successful_real_write(self, tmp_path):
         source = tmp_path / "crypto.py"
         source.write_text(
-            "import rsa\n"
-            "private_key = rsa.generate_private_key(65537, 2048)\n"
-            "print('done')\n",
+            "import rsa\nprivate_key = rsa.generate_private_key(65537, 2048)\nprint('done')\n",
             encoding="utf-8",
         )
         finding = make_finding(file=source, line_start=2, line_end=2)
@@ -222,7 +216,7 @@ class TestMigratorNode:
         exec_plan = MigrationExecutionPlan(
             session_id="s",
             waves=[[f.id]],
-            finding_plans={"OTHER": p},     # no entry for f.id
+            finding_plans={"OTHER": p},  # no entry for f.id
             finding_meta={f.id: make_meta(f)},
         )
         state = MigratorState(
@@ -251,8 +245,8 @@ class TestMigratorNode:
 # build_validator_state
 # ---------------------------------------------------------------------------
 
-class TestBuildValidatorState:
 
+class TestBuildValidatorState:
     def test_fields_match_validator_shape(self):
         finding = make_finding()
         plan = make_plan(finding_id=finding.id)
@@ -277,8 +271,8 @@ class TestBuildValidatorState:
 # apply_patch (patcher unit tests)
 # ---------------------------------------------------------------------------
 
-class TestApplyPatch:
 
+class TestApplyPatch:
     def test_replaces_target_lines(self, tmp_path):
         src = tmp_path / "f.py"
         src.write_text("a = 1\nb = 2\nc = 3\n", encoding="utf-8")
@@ -334,8 +328,8 @@ class TestApplyPatch:
 # run_migrator (convenience entry point)
 # ---------------------------------------------------------------------------
 
-class TestRunMigrator:
 
+class TestRunMigrator:
     def test_processes_all_findings_returns_validator_state(self, tmp_path):
         src1 = tmp_path / "a.py"
         src2 = tmp_path / "b.py"

@@ -6,7 +6,8 @@ Shared Pydantic data-models (contracts) used across all modules.
 
 from __future__ import annotations
 
-from enum import Enum
+from collections.abc import Callable
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +18,7 @@ from pydantic import BaseModel, Field
 # ---------------------------------------------------------------------------
 
 
-class QuantumRisk(str, Enum):
+class QuantumRisk(StrEnum):
     """NIST-aligned quantum vulnerability classification."""
 
     CRITICAL = "CRITICAL"
@@ -27,7 +28,7 @@ class QuantumRisk(str, Enum):
     INFO = "INFO"
 
 
-class Algorithm(str, Enum):
+class Algorithm(StrEnum):
     """Known cryptographic algorithms tracked by the detector."""
 
     RSA = "RSA"
@@ -51,7 +52,7 @@ class Algorithm(str, Enum):
     UNKNOWN = "UNKNOWN"
 
 
-class MigrationStatus(str, Enum):
+class MigrationStatus(StrEnum):
     PENDING = "pending"
     SELECTED = "selected"
     IN_PROGRESS = "in_progress"
@@ -61,41 +62,79 @@ class MigrationStatus(str, Enum):
 
 
 # ---------------------------------------------------------------------------
-# Ingestion & Analyzer models
+# Ingestion models  (produced by Ingestion, consumed by Analyzer)
 # ---------------------------------------------------------------------------
 
 
 class IngestionConfig(BaseModel):
+    """Configuration for the ingestion walk."""
+
+    extensions: list[str] = Field(
+        default_factory=lambda: [".py"],
+        description="File extensions to include (e.g. ['.py', '.java'])",
+    )
     exclude_patterns: list[str] = Field(
-        default_factory=lambda: ["*.pyc", "__pycache__", ".git", ".venv", "venv", "node_modules"]
+        default_factory=lambda: [
+            ".venv",
+            "__pycache__",
+            ".git",
+            "*.pyc",
+            "node_modules",
+            "*.egg-info",
+            ".mypy_cache",
+            ".ruff_cache",
+        ],
     )
-    allowed_extensions: list[str] = Field(
-        default_factory=lambda: [".py", ".java", ".go", ".c", ".cpp", ".rs", ".h"]
+    max_file_size: int = Field(
+        default=1_000_000,  # 1 MB — oversized files are skipped
+        description="Maximum file size in bytes; larger files are excluded",
     )
-    max_file_size_bytes: int = 1_000_000
+    respect_gitignore: bool = True
 
 
 class SourceFile(BaseModel):
-    path: Path
-    content: str
-    language: str
+    """A single source file collected by Ingestion."""
+
+    path: Path  # Absolute path to the file
+    content: str  # Raw text content (UTF-8)
+    language: str  # e.g. "python", "java", "go", "c", "rust"
+    size_bytes: int = 0
 
 
 class CodebaseSnapshot(BaseModel):
+    """
+    The complete, ordered collection of source files from one scan target.
+
+    Produced by: Ingestion
+    Consumed by: Analyzer
+    """
+
     root_path: Path
     files: list[SourceFile] = Field(default_factory=list)
     file_count: int = 0
 
 
+# ---------------------------------------------------------------------------
+# Analyzer models  (produced by Analyzer, consumed by Detector)
+# ---------------------------------------------------------------------------
+
+
 class ImportRef(BaseModel):
-    module: str
+    """A single import statement extracted from a source file."""
+
+    module: str  # Top-level module name (e.g. "cryptography")
+    qualified_name: str  # Full import path (e.g. "cryptography.hazmat.primitives")
     alias: str | None = None
     line: int
     language: str
+    is_crypto: bool = False  # True if module is on the crypto allowlist
 
 
 class CallSite(BaseModel):
+    """A function / method call expression extracted from a source file."""
+
     function_name: str
+    qualified_name: str | None = None  # e.g. "rsa.generate_private_key" if resolvable
     arguments: list[str] = Field(default_factory=list)
     line: int
     enclosing_function: str | None = None
@@ -103,21 +142,78 @@ class CallSite(BaseModel):
 
 
 class ParsedFile(BaseModel):
+    """
+    The output of parsing a single source file via tree-sitter (and optionally libcst).
+
+    The `ts_tree` and `cst_tree` fields hold opaque parser objects; they are excluded
+    from serialization because they are not JSON-serialisable.  Consumers receive them
+    as live Python objects in-process.
+
+    Produced by: Analyzer
+    Consumed by: Detector
+    """
+
+    model_config = {"arbitrary_types_allowed": True}
+
     path: Path
     language: str
-    ts_tree: Any | None = None
-    cst_tree: Any | None = None
+    # tree-sitter Tree object (all languages) — excluded from serialisation
+    ts_tree: Any | None = Field(default=None, exclude=True)
+    # libcst Module object (Python only) — excluded from serialisation
+    cst_tree: Any | None = Field(default=None, exclude=True)
     imports: list[ImportRef] = Field(default_factory=list)
     call_sites: list[CallSite] = Field(default_factory=list)
+    # Intra-file call graph: callee_name → list of caller function names
+    intra_file_calls: dict[str, list[str]] = Field(default_factory=dict)
+    # Function definitions found in this file (name → line)
+    function_defs: dict[str, int] = Field(default_factory=dict)
+    # Class definitions found in this file (name → line)
+    class_defs: dict[str, int] = Field(default_factory=dict)
 
 
 class AnalysisResult(BaseModel):
-    files: list[ParsedFile] = Field(default_factory=list)
-    import_index: dict[str, list[str]] = Field(default_factory=dict)
+    """
+    Structural analysis of the full codebase.
+
+    Produced by: Analyzer
+    Consumed by: Detector
+    """
+
+    model_config = {"arbitrary_types_allowed": True}
+
+    parsed_files: list[ParsedFile] = Field(default_factory=list)
+    # Flat index of all imports across the codebase: module_name → list[ImportRef]
+    import_index: dict[str, list[ImportRef]] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
-# Dependency graph models
+# Detector — pattern rule definition (used internally in detector/patterns/)
+# ---------------------------------------------------------------------------
+
+
+class DetectionRule(BaseModel):
+    """
+    A single pattern-matching rule used by the Detector.
+
+    Each algorithm family has a dedicated patterns file under
+    src/qsma/detector/patterns/.  Rules are collected at import time.
+
+    The `matcher_fn` is a callable that receives a ParsedFile and returns
+    a (possibly empty) list of CryptoHit objects.  It is excluded from
+    serialisation (not JSON-serialisable).
+    """
+
+    model_config = {"arbitrary_types_allowed": True}
+
+    rule_id: str
+    algorithm_hint: str  # Human-readable hint, e.g. "RSA key generation"
+    usage_type: str  # "import", "key_generation", "encryption", …
+    # matcher_fn(parsed_file) → list[CryptoHit]
+    matcher_fn: Callable[..., Any] = Field(exclude=True)
+
+
+# ---------------------------------------------------------------------------
+# Dependency graph models  (produced by Detector, stored in Neo4j)
 # ---------------------------------------------------------------------------
 
 
@@ -146,12 +242,6 @@ class DependencyGraph(BaseModel):
 # ---------------------------------------------------------------------------
 # Detection models
 # ---------------------------------------------------------------------------
-
-
-class DetectionRule(BaseModel):
-    rule_id: str
-    algorithm_hint: str
-    usage_type: str
 
 
 class CodeLocation(BaseModel):
@@ -257,6 +347,7 @@ class ScanReport(BaseModel):
 # Planner execution plan models
 # ---------------------------------------------------------------------------
 
+
 class FindingMeta(BaseModel):
     """
     Location and dependency metadata for one finding, as emitted by the Planner
@@ -275,16 +366,17 @@ class FindingMeta(BaseModel):
         the crypto usage (e.g. "sign_data", "KeyManager.__init__").  Empty string
         if the Detector could not determine it.  Primary locator for the Migrator.
     """
+
     finding_id: str
-    order: int                          # global sequence number (1-based) across all waves
+    order: int  # global sequence number (1-based) across all waves
     file: Path
-    language: str                       # e.g. "python", "java", "go"
-    symbol_name: str = ""               # enclosing function/class/block name; "" if unknown
+    language: str  # e.g. "python", "java", "go"
+    symbol_name: str = ""  # enclosing function/class/block name; "" if unknown
     line_start: int
     line_end: int
-    algorithm: str                      # existing (source) algorithm — e.g. "RSA"
-    target_algorithm: str               # new (target) algorithm — e.g. "ML-DSA (Dilithium)"
-    description: str                    # human-readable summary of what to change
+    algorithm: str  # existing (source) algorithm — e.g. "RSA"
+    target_algorithm: str  # new (target) algorithm — e.g. "ML-DSA (Dilithium)"
+    description: str  # human-readable summary of what to change
     # finding_ids of OTHER findings whose migrations must complete before this one
     depends_on: list[str] = Field(default_factory=list)
 
@@ -306,6 +398,7 @@ class MigrationExecutionPlan(BaseModel):
     Consumed by: Migrator
     Persisted to: Redis session (keyed by session_id)
     """
+
     session_id: str
     waves: list[list[str]] = Field(default_factory=list)
     # finding_id → MigrationPlan (what to change and how)
@@ -317,6 +410,7 @@ class MigrationExecutionPlan(BaseModel):
 # ---------------------------------------------------------------------------
 # Graph envelope — thin session state for LangGraph wiring only
 # ---------------------------------------------------------------------------
+
 
 class MigrationSessionState(BaseModel):
     """
@@ -334,14 +428,17 @@ class MigrationSessionState(BaseModel):
     Persisted to Redis after each node transition (TTL 24 h, ADR-008).
     Resume via `qsma migrate --resume <session_id>`.
     """
+
     session_id: str
     target_path: Path
 
     # ── Cross-boundary outputs (written by each stage, read by the next) ─
-    execution_plan: MigrationExecutionPlan | None = None     # Planner → Migrator
-    transformation_results: list[TransformationResult] = Field(default_factory=list)  # Migrator → Validator
-    validation_results: list[ValidationResult] = Field(default_factory=list)          # Validator → Reporter
+    execution_plan: MigrationExecutionPlan | None = None  # Planner → Migrator
+    transformation_results: list[TransformationResult] = Field(
+        default_factory=list
+    )  # Migrator → Validator
+    validation_results: list[ValidationResult] = Field(default_factory=list)  # Validator → Reporter
 
     # ── Routing (set by each node for graph.py to act on) ─────────────────
     current_finding_id: str | None = None
-    routing_signal: str = "pass"    # "validate" | "retry" | "escalate" | "done"
+    routing_signal: str = "pass"  # "validate" | "retry" | "escalate" | "done"

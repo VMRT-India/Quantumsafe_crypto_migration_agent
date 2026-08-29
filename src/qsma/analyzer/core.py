@@ -39,11 +39,10 @@ def _get_tree_sitter_parser(language: str) -> Any:
             logger.warning(f"Unsupported language for tree-sitter: {language}")
             return None
 
-        module_name, lang_name = lang_map[language]
+        module_name, _lang_name = lang_map[language]
         lang_module = __import__(module_name)
-        language_obj = Language(lang_module.language(), lang_name)
-        parser = Parser()
-        parser.set_language(language_obj)
+        language_obj = Language(lang_module.language())
+        parser = Parser(language_obj)
         return parser
     except ImportError:
         logger.error(f"tree-sitter grammar for '{language}' not installed.")
@@ -67,7 +66,8 @@ def _extract_python_structures(
                 for alias in node.names:
                     imports.append(
                         ImportRef(
-                            module=alias.name,
+                            module=alias.name.split(".")[0],
+                            qualified_name=alias.name,
                             alias=alias.asname,
                             line=node.lineno,
                             language="python",
@@ -76,9 +76,11 @@ def _extract_python_structures(
             elif isinstance(node, ast.ImportFrom):
                 module = node.module or ""
                 for alias in node.names:
+                    full = f"{module}.{alias.name}" if module else alias.name
                     imports.append(
                         ImportRef(
-                            module=f"{module}.{alias.name}" if module else alias.name,
+                            module=module.split(".")[0] if module else alias.name,
+                            qualified_name=full,
                             alias=alias.asname,
                             line=node.lineno,
                             language="python",
@@ -120,7 +122,7 @@ def analyze_codebase(snapshot: CodebaseSnapshot) -> AnalysisResult:
     logger.info(f"Starting analysis of {snapshot.file_count} files...")
 
     parsed_files: list[ParsedFile] = []
-    import_index: dict[str, list[str]] = {}
+    import_index: dict[str, list[ImportRef]] = {}
 
     for source_file in snapshot.files:
         logger.debug(f"Analyzing: {source_file.path}")
@@ -153,9 +155,7 @@ def analyze_codebase(snapshot: CodebaseSnapshot) -> AnalysisResult:
             )
 
         for imp in imports:
-            if imp.module not in import_index:
-                import_index[imp.module] = []
-            import_index[imp.module].append(str(source_file.path))
+            import_index.setdefault(imp.module, []).append(imp)
 
         parsed_files.append(
             ParsedFile(
@@ -169,4 +169,4 @@ def analyze_codebase(snapshot: CodebaseSnapshot) -> AnalysisResult:
         )
 
     logger.info(f"Analysis complete. Processed {len(parsed_files)} files.")
-    return AnalysisResult(files=parsed_files, import_index=import_index)
+    return AnalysisResult(parsed_files=parsed_files, import_index=import_index)

@@ -17,8 +17,6 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from qsma.llm.client import LLMClient, LLMError
 from qsma.planner import (
     _build_plan_for_finding,
@@ -38,10 +36,10 @@ from qsma.utils.models import (
     QuantumRisk,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def make_finding(
     id: str,
@@ -80,20 +78,22 @@ def make_finding(
     )
 
 
-MOCK_PLAN_JSON = json.dumps({
-    "strategy": "llm_assisted",
-    "target_algorithm": "ML-DSA (Dilithium)",
-    "description": "Replace RSA with ML-DSA (Dilithium) per FIPS 204.",
-    "estimated_complexity": "medium",
-    "requires_dependency_update": True,
-    "new_dependencies": ["pqcrypto"],
-    "transformation_hints": {
-        "replace_import": "from cryptography... → import dilithium",
-        "key_size": "Dilithium3",
-        "api_note": "generate_keys() replaces generate_private_key()",
-        "caveat": "",
-    },
-})
+MOCK_PLAN_JSON = json.dumps(
+    {
+        "strategy": "llm_assisted",
+        "target_algorithm": "ML-DSA (Dilithium)",
+        "description": "Replace RSA with ML-DSA (Dilithium) per FIPS 204.",
+        "estimated_complexity": "medium",
+        "requires_dependency_update": True,
+        "new_dependencies": ["pqcrypto"],
+        "transformation_hints": {
+            "replace_import": "from cryptography... → import dilithium",
+            "key_size": "Dilithium3",
+            "api_note": "generate_keys() replaces generate_private_key()",
+            "caveat": "",
+        },
+    }
+)
 
 
 def mock_llm(response: str = MOCK_PLAN_JSON) -> MagicMock:
@@ -106,8 +106,8 @@ def mock_llm(response: str = MOCK_PLAN_JSON) -> MagicMock:
 # _build_plan_for_finding — language gate removed
 # ---------------------------------------------------------------------------
 
-class TestBuildPlanForFinding:
 
+class TestBuildPlanForFinding:
     def test_python_finding_calls_llm(self):
         finding = make_finding("F1", language="python")
         plan = _build_plan_for_finding(finding, mock_llm(), "sys prompt")
@@ -132,15 +132,17 @@ class TestBuildPlanForFinding:
         assert plan.transformation_hints["source_algorithm"] == Algorithm.ECDH.value
 
     def test_source_algorithm_injected_even_when_llm_returns_empty_hints(self):
-        response = json.dumps({
-            "strategy": "llm_assisted",
-            "target_algorithm": "ML-KEM (Kyber)",
-            "description": "Replace ECDH.",
-            "estimated_complexity": "medium",
-            "requires_dependency_update": False,
-            "new_dependencies": [],
-            "transformation_hints": {},   # LLM returned empty hints
-        })
+        response = json.dumps(
+            {
+                "strategy": "llm_assisted",
+                "target_algorithm": "ML-KEM (Kyber)",
+                "description": "Replace ECDH.",
+                "estimated_complexity": "medium",
+                "requires_dependency_update": False,
+                "new_dependencies": [],
+                "transformation_hints": {},  # LLM returned empty hints
+            }
+        )
         finding = make_finding("F1", algorithm=Algorithm.ECDH)
         plan = _build_plan_for_finding(finding, mock_llm(response), "sys")
         assert plan.transformation_hints["source_algorithm"] == "ECDH"
@@ -162,15 +164,17 @@ class TestBuildPlanForFinding:
         assert plan.transformation_hints["source_algorithm"] == finding.algorithm.value
 
     def test_unknown_target_algorithm_resolves_to_unknown(self):
-        response = json.dumps({
-            "strategy": "llm_assisted",
-            "target_algorithm": "NOT_REAL",
-            "description": "test",
-            "estimated_complexity": "low",
-            "requires_dependency_update": False,
-            "new_dependencies": [],
-            "transformation_hints": {},
-        })
+        response = json.dumps(
+            {
+                "strategy": "llm_assisted",
+                "target_algorithm": "NOT_REAL",
+                "description": "test",
+                "estimated_complexity": "low",
+                "requires_dependency_update": False,
+                "new_dependencies": [],
+                "transformation_hints": {},
+            }
+        )
         finding = make_finding("F1")
         plan = _build_plan_for_finding(finding, mock_llm(response), "sys")
         assert plan.target_algorithm == Algorithm.UNKNOWN
@@ -190,8 +194,8 @@ class TestBuildPlanForFinding:
 # _topo_sort_findings
 # ---------------------------------------------------------------------------
 
-class TestTopoSort:
 
+class TestTopoSort:
     def test_no_deps_sorted_by_descending_blast_radius(self):
         f1 = make_finding("F1", blast_radius=1)
         f2 = make_finding("F2", blast_radius=5)
@@ -206,8 +210,9 @@ class TestTopoSort:
         F2.metadata["depends_on_node_ids"] = ["node-1"]
         """
         f1 = make_finding("F1", blast_radius=2, dependency_node_id="node-1")
-        f2 = make_finding("F2", blast_radius=0, dependency_node_id="node-2",
-                          depends_on_node_ids=["node-1"])
+        f2 = make_finding(
+            "F2", blast_radius=0, dependency_node_id="node-2", depends_on_node_ids=["node-1"]
+        )
         ordered = _topo_sort_findings([f2, f1])  # pass in reverse order
         ids = [f.id for f in ordered]
         assert ids.index("F1") < ids.index("F2")
@@ -215,10 +220,8 @@ class TestTopoSort:
     def test_chain_order(self):
         """F3 → F2 → F1: correct order is F1, F2, F3."""
         f1 = make_finding("F1", blast_radius=3, dependency_node_id="n1")
-        f2 = make_finding("F2", blast_radius=1, dependency_node_id="n2",
-                          depends_on_node_ids=["n1"])
-        f3 = make_finding("F3", blast_radius=0, dependency_node_id="n3",
-                          depends_on_node_ids=["n2"])
+        f2 = make_finding("F2", blast_radius=1, dependency_node_id="n2", depends_on_node_ids=["n1"])
+        f3 = make_finding("F3", blast_radius=0, dependency_node_id="n3", depends_on_node_ids=["n2"])
         ordered = _topo_sort_findings([f3, f1, f2])
         ids = [f.id for f in ordered]
         assert ids == ["F1", "F2", "F3"]
@@ -234,8 +237,8 @@ class TestTopoSort:
 # _build_waves
 # ---------------------------------------------------------------------------
 
-class TestBuildWaves:
 
+class TestBuildWaves:
     def test_all_independent_fits_in_one_wave(self):
         findings = [make_finding(f"F{i}") for i in range(4)]
         deps_of = {f.id: [] for f in findings}
@@ -288,13 +291,11 @@ class TestBuildWaves:
 # planner_node
 # ---------------------------------------------------------------------------
 
-class TestPlannerNode:
 
+class TestPlannerNode:
     def test_produces_execution_plan(self):
         findings = [make_finding("F1"), make_finding("F2", algorithm=Algorithm.ECDH)]
-        state = PlannerState(
-            session_id="s", target_path=Path("/tmp"), selected_findings=findings
-        )
+        state = PlannerState(session_id="s", target_path=Path("/tmp"), selected_findings=findings)
         with patch("qsma.planner.LLMClient") as MockLLM:
             MockLLM.return_value.chat.return_value = MOCK_PLAN_JSON
             result = planner_node(state)
@@ -306,9 +307,7 @@ class TestPlannerNode:
 
     def test_finding_meta_populated(self):
         finding = make_finding("F1", language="java")
-        state = PlannerState(
-            session_id="s", target_path=Path("/tmp"), selected_findings=[finding]
-        )
+        state = PlannerState(session_id="s", target_path=Path("/tmp"), selected_findings=[finding])
         with patch("qsma.planner.LLMClient") as MockLLM:
             MockLLM.return_value.chat.return_value = MOCK_PLAN_JSON
             result = planner_node(state)
@@ -317,30 +316,24 @@ class TestPlannerNode:
         assert meta.language == "java"
         assert meta.file == Path("src/crypto.py")
         assert meta.order == 1
-        assert meta.symbol_name == ""       # not set in metadata → empty string
+        assert meta.symbol_name == ""  # not set in metadata → empty string
 
     def test_finding_meta_order_sequential(self):
         """Order numbers must be 1-based and sequential across all waves."""
         findings = [make_finding(f"F{i}") for i in range(4)]
-        state = PlannerState(
-            session_id="s", target_path=Path("/tmp"), selected_findings=findings
-        )
+        state = PlannerState(session_id="s", target_path=Path("/tmp"), selected_findings=findings)
         with patch("qsma.planner.LLMClient") as MockLLM:
             MockLLM.return_value.chat.return_value = MOCK_PLAN_JSON
             result = planner_node(state)
 
-        orders = sorted(
-            meta.order for meta in result.execution_plan.finding_meta.values()
-        )
+        orders = sorted(meta.order for meta in result.execution_plan.finding_meta.values())
         assert orders == list(range(1, 5))
 
     def test_finding_meta_symbol_name_forwarded(self):
         """symbol_name from finding.metadata must be forwarded into FindingMeta."""
         finding = make_finding("F1")
         finding.metadata["symbol_name"] = "sign_data"
-        state = PlannerState(
-            session_id="s", target_path=Path("/tmp"), selected_findings=[finding]
-        )
+        state = PlannerState(session_id="s", target_path=Path("/tmp"), selected_findings=[finding])
         with patch("qsma.planner.LLMClient") as MockLLM:
             MockLLM.return_value.chat.return_value = MOCK_PLAN_JSON
             result = planner_node(state)
@@ -352,15 +345,16 @@ class TestPlannerNode:
         Two findings in the same file, independent of each other.
         The one with the lower line_start must come first inside the wave.
         """
-        f_low  = make_finding("F_low",  line_start=5,  line_end=8)
+        f_low = make_finding("F_low", line_start=5, line_end=8)
         f_high = make_finding("F_high", line_start=20, line_end=22)
         # Override both to same file so sorting is deterministic
-        f_low.location.file  = Path("src/same_file.py")
+        f_low.location.file = Path("src/same_file.py")
         f_high.location.file = Path("src/same_file.py")
 
         state = PlannerState(
-            session_id="s", target_path=Path("/tmp"),
-            selected_findings=[f_high, f_low],   # pass high-line first
+            session_id="s",
+            target_path=Path("/tmp"),
+            selected_findings=[f_high, f_low],  # pass high-line first
         )
         with patch("qsma.planner.LLMClient") as MockLLM:
             MockLLM.return_value.chat.return_value = MOCK_PLAN_JSON
@@ -369,14 +363,14 @@ class TestPlannerNode:
         wave0 = result.execution_plan.waves[0]
         assert wave0.index("F_low") < wave0.index("F_high")
         # order numbers must reflect the sorted position
-        assert result.execution_plan.finding_meta["F_low"].order < \
-               result.execution_plan.finding_meta["F_high"].order
+        assert (
+            result.execution_plan.finding_meta["F_low"].order
+            < result.execution_plan.finding_meta["F_high"].order
+        )
 
     def test_migration_order_flat_list(self):
         findings = [make_finding(f"F{i}") for i in range(3)]
-        state = PlannerState(
-            session_id="s", target_path=Path("/tmp"), selected_findings=findings
-        )
+        state = PlannerState(session_id="s", target_path=Path("/tmp"), selected_findings=findings)
         with patch("qsma.planner.LLMClient") as MockLLM:
             MockLLM.return_value.chat.return_value = MOCK_PLAN_JSON
             result = planner_node(state)
@@ -388,16 +382,22 @@ class TestPlannerNode:
         """If execution_plan is already set, planner_node must not call LLM."""
         finding = make_finding("F1")
         existing_plan = MigrationExecutionPlan(
-            session_id="s", waves=[["F1"]],
-            finding_plans={"F1": MigrationPlan(
-                finding_id="F1", strategy="llm_assisted",
-                target_algorithm=Algorithm.DILITHIUM,
-                description="already planned", estimated_complexity="low",
-            )},
+            session_id="s",
+            waves=[["F1"]],
+            finding_plans={
+                "F1": MigrationPlan(
+                    finding_id="F1",
+                    strategy="llm_assisted",
+                    target_algorithm=Algorithm.DILITHIUM,
+                    description="already planned",
+                    estimated_complexity="low",
+                )
+            },
             finding_meta={},
         )
         state = PlannerState(
-            session_id="s", target_path=Path("/tmp"),
+            session_id="s",
+            target_path=Path("/tmp"),
             selected_findings=[finding],
             execution_plan=existing_plan,
         )
@@ -407,9 +407,7 @@ class TestPlannerNode:
 
     def test_finding_status_set_to_in_progress(self):
         finding = make_finding("F1")
-        state = PlannerState(
-            session_id="s", target_path=Path("/tmp"), selected_findings=[finding]
-        )
+        state = PlannerState(session_id="s", target_path=Path("/tmp"), selected_findings=[finding])
         with patch("qsma.planner.LLMClient") as MockLLM:
             MockLLM.return_value.chat.return_value = MOCK_PLAN_JSON
             result = planner_node(state)
@@ -418,9 +416,7 @@ class TestPlannerNode:
 
     def test_pending_plans_mirrored_from_execution_plan(self):
         finding = make_finding("F1")
-        state = PlannerState(
-            session_id="s", target_path=Path("/tmp"), selected_findings=[finding]
-        )
+        state = PlannerState(session_id="s", target_path=Path("/tmp"), selected_findings=[finding])
         with patch("qsma.planner.LLMClient") as MockLLM:
             MockLLM.return_value.chat.return_value = MOCK_PLAN_JSON
             result = planner_node(state)
@@ -431,11 +427,8 @@ class TestPlannerNode:
     def test_waves_in_execution_plan(self):
         """With a chain dependency, waves should split correctly."""
         f1 = make_finding("F1", blast_radius=2, dependency_node_id="n1")
-        f2 = make_finding("F2", blast_radius=0, dependency_node_id="n2",
-                          depends_on_node_ids=["n1"])
-        state = PlannerState(
-            session_id="s", target_path=Path("/tmp"), selected_findings=[f1, f2]
-        )
+        f2 = make_finding("F2", blast_radius=0, dependency_node_id="n2", depends_on_node_ids=["n1"])
+        state = PlannerState(session_id="s", target_path=Path("/tmp"), selected_findings=[f1, f2])
         with patch("qsma.planner.LLMClient") as MockLLM:
             MockLLM.return_value.chat.return_value = MOCK_PLAN_JSON
             result = planner_node(state)
@@ -451,8 +444,8 @@ class TestPlannerNode:
 # run_planner (convenience entry point)
 # ---------------------------------------------------------------------------
 
-class TestRunPlanner:
 
+class TestRunPlanner:
     def test_returns_state_with_execution_plan(self):
         findings = [make_finding("F1"), make_finding("F2")]
         with patch("qsma.planner.LLMClient") as MockLLM:
