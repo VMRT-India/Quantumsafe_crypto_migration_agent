@@ -1,0 +1,6 @@
+{
+  "algorithm": "ECDH",
+  "target_algorithm": "ML-KEM",
+  "nist_standard": "FIPS 203 (ML-KEM / Kyber)",
+  "examples": []
+}

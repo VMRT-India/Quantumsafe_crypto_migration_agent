@@ -2,18 +2,20 @@
 
 > IBM Dev Day Hackathon — Team Project
 
-A CLI developer tool that analyzes Python codebases for quantum-vulnerable cryptography,
-explains the risk, and automatically migrates vulnerable code to NIST post-quantum standards.
+A CLI developer tool that analyzes codebases (Python, Java, Go, C, Rust) for quantum-vulnerable
+cryptography, explains the risk, and automatically migrates vulnerable Python code to NIST
+post-quantum standards using a LangGraph agentic loop backed by IBM watsonx.ai.
 
 ---
 
 ## What it does
 
 ```
-qsma scan <path>      →  detect crypto findings (RSA, ECDSA, ECDH, DES, AES-128, …)
-qsma report <path>    →  display a structured findings report
-qsma migrate <path>   →  interactively select and apply quantum-safe migrations
-qsma validate <path>  →  validate migrated code builds and tests still pass
+qsma scan <path>               →  detect crypto findings across all supported languages
+qsma report <path>             →  display a structured findings report
+qsma migrate <path>            →  select findings and apply LLM-agentic quantum-safe migrations
+qsma migrate --resume <id>     →  resume an interrupted migration from Redis session state
+qsma validate <path>           →  validate migrated code builds and tests still pass
 ```
 
 **Full workflow:**
@@ -66,19 +68,32 @@ qsma --help
 
 See [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) — the master document for architecture,
 module specifications, dependency graph, parallelization plan, and development phases.
+See [`ARCHITECTURE.md`](ARCHITECTURE.md) — full pipeline diagram and file index.
 
 ```
-CLI → Ingestion → Analyzer → Detector → Classifier → Reporter
-                                                    ↓
-                                              Planner → Migrator → Validator → Reporter
+CLI → Ingestion → Analyzer → Detector → Classifier
+                 (tree-sitter,           (NIST risk table,
+                  all languages)          no LLM)
+                                               ↓
+                              ┌────────────────────────────────┐
+                              │  LangGraph MigrationGraph       │
+                              │  (Redis session state)          │
+                              │  Planner agent                  │
+                              │    → Migrator agent             │
+                              │      → Validator agent          │
+                              │        → retry or pass          │
+                              └────────────────┬───────────────┘
+                                               ↓
+                                           Reporter
 ```
 
 ---
 
 ## IBM technologies
 
-- **watsonx.ai** — Granite Code model for LLM-assisted migration planning
+- **watsonx.ai** — Granite Code model; default LLM backend for all three migration agents (Planner, Migrator, Validator)
 - **IBM Cloud** — credential management via environment variables
+- **LangGraph** — agentic orchestration over watsonx.ai (provider-agnostic; switch via `.env` only)
 
 ---
 
@@ -86,23 +101,28 @@ CLI → Ingestion → Analyzer → Detector → Classifier → Reporter
 
 ```
 src/qsma/
-├── cli/          — Click commands (thin orchestration layer)
-├── ingestion/    — Filesystem walk, source file collection
-├── analyzer/     — AST parsing, call graph extraction (libcst)
-├── detector/     — Pattern-matching for crypto usage sites
-├── classifier/   — Quantum risk scoring and recommendations
-├── planner/      — Migration strategy selection
-├── migrator/     — Code transformation (deterministic AST + LLM fallback)
-├── validator/    — Post-migration build/test validation
-├── reporter/     — Terminal/JSON/Markdown output formatting
-├── llm/          — watsonx.ai client wrapper
-└── utils/        — Shared Pydantic data models (inter-module contracts)
+├── cli/                   — Click commands (thin orchestration layer)
+├── ingestion/             — Filesystem walk, language detection, source file collection
+├── analyzer/              — tree-sitter (all languages) + libcst CST builder (Python only)
+├── detector/              — tree-sitter query pattern-matching for crypto usage (all languages)
+├── classifier/            — Quantum risk scoring via NIST risk table (no LLM)
+├── planner/               — LangGraph agent node: LLM reasons migration strategy per finding
+├── migrator/              — LangGraph agent node: LLM generates transformed code; libcst splices it in
+├── validator/             — LangGraph agent node: syntax/test check + LLM failure analysis + retry signal
+├── reporter/              — Terminal/JSON/Markdown output formatting
+├── agent/                 — LangGraph StateGraph wiring (planner→migrator→validator loop)
+├── llm/
+│   ├── client.py          — watsonx.ai / OpenAI / Anthropic provider-agnostic wrapper
+│   └── training_data/     — Few-shot migration examples + agent system prompts (JSON/txt)
+└── utils/
+    ├── models.py          — Shared Pydantic contracts (CryptoFinding, MigrationSessionState, …)
+    └── session.py         — Redis session manager (MigrationSessionState persistence + resume)
 
 tests/
 ├── unit/         — Per-module unit tests
 ├── integration/  — Multi-module pipeline tests
 ├── e2e/          — Full CLI end-to-end tests
-└── fixtures/     — Sample vulnerable Python projects for testing
+└── fixtures/     — Sample vulnerable projects for testing (deliberately vulnerable)
 ```
 
 ---

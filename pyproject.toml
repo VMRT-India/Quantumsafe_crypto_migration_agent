@@ -16,16 +16,33 @@ dependencies = [
     "rich>=13.0",          # terminal output formatting
 
     # AST / static analysis
-    "libcst>=1.1",         # concrete syntax tree — lossless Python AST transforms
-    "tree-sitter>=0.21",   # multi-language parsing (future extension)
+    # tree-sitter: PRIMARY multi-language parser — Analyzer + Detector (all languages)
+    "tree-sitter>=0.21",
+    # Individual tree-sitter grammars — one per supported language
+    "tree-sitter-python>=0.21",
+    "tree-sitter-java>=0.21",
+    "tree-sitter-go>=0.21",
+    "tree-sitter-c>=0.21",
+    "tree-sitter-rust>=0.21",
+    # libcst: Python-only lossless CST — used ONLY in Migrator for Python transforms (ADR-003)
+    "libcst>=1.1",
+
+    # Agentic orchestration — LangGraph (ADR-007)
+    # Provider-agnostic; backed by watsonx.ai via LLMClient
+    "langgraph>=0.2",
+    "langgraph-checkpoint-redis>=0.1",  # Redis checkpointer for session persistence (ADR-008)
 
     # LLM integration — IBM watsonx.ai is the DEFAULT provider
     # Switch provider via LLM_PROVIDER in .env — no code change required.
     "ibm-watsonx-ai>=1.0",
 
+    # Session persistence — Redis (ADR-008)
+    # Optional at runtime: if Redis unavailable, tool falls back to stateless mode
+    "redis>=5.0",
+
     # Configuration / environment
     "python-dotenv>=1.0",
-    "pydantic>=2.5",       # data models and contract validation
+    "pydantic>=2.5",       # data models and contract validation; MigrationSessionState is LangGraph state
 
     # Utility
     "typing-extensions>=4.9",
@@ -46,6 +63,12 @@ llm-anthropic = [
 llm-all = [
     "openai>=1.30",
     "anthropic>=0.25",
+]
+# Optional: vector DB for semantic retrieval of patterns/tools when the library grows large
+# pip install 'qsma[qdrant]'
+# See PROJECT_CONTEXT.md §13 "When to use Qdrant"
+qdrant = [
+    "qdrant-client>=1.9",
 ]
 dev = [
     "pytest>=7.4",

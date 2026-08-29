@@ -1,0 +1,7 @@
+{
+  "algorithm": "UNKNOWN",
+  "target_algorithm": null,
+  "nist_standard": null,
+  "note": "Generic few-shot examples for LLM-assisted migration of unrecognised crypto patterns.",
+  "examples": []
+}

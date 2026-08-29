@@ -1,0 +1,6 @@
+# Validator Agent — System Prompt (stub)
+# Planned (Phase 2). Fill in with actual prompt before Phase 2 implementation.
+#
+# This prompt is loaded by qsma.validator.validator_node at agent startup.
+# It instructs the LLM on how to interpret test failure output and produce
+# structured retry_hints for the Migrator node.

@@ -1,0 +1,6 @@
+# Planner Agent — System Prompt (stub)
+# Planned (Phase 2). Fill in with actual prompt before Phase 2 implementation.
+#
+# This prompt is loaded by qsma.planner.planner_node at agent startup.
+# It instructs the LLM on how to reason about migration strategy selection
+# and produce a structured MigrationPlan JSON response.

@@ -1,0 +1,6 @@
+{
+  "algorithm": "ECDSA",
+  "target_algorithm": "ML-DSA",
+  "nist_standard": "FIPS 204 (ML-DSA / Dilithium)",
+  "examples": []
+}

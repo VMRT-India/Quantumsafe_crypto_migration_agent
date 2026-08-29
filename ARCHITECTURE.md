@@ -53,18 +53,22 @@
 |---|---|---|
 | [`src/qsma/__init__.py`](src/qsma/__init__.py) | Stub | Package marker. Empty. |
 | [`src/qsma/cli/__init__.py`](src/qsma/cli/__init__.py) | Stub | Package marker. Empty. |
-| [`src/qsma/cli/main.py`](src/qsma/cli/main.py) | ✅ Implemented | **CLI entry point.** Click group `cli` with 4 sub-commands: `scan(path, fmt, output)`, `report(path, findings)`, `migrate(path, finding_id, dry_run, auto)`, `validate(path, timeout)`. All commands respond but delegate no logic yet — each prints a stub message. Uses `rich.console.Console` for output. |
+| [`src/qsma/cli/main.py`](src/qsma/cli/main.py) | ✅ Implemented | **CLI entry point.** Click group `cli` with 4 sub-commands: `scan(path, fmt, output)`, `report(path, findings)`, `migrate(path, finding_id, dry_run, auto, resume)`, `validate(path, timeout)`. All commands respond but delegate no logic yet — each prints a stub message. Uses `rich.console.Console` for output. |
 | [`src/qsma/utils/__init__.py`](src/qsma/utils/__init__.py) | Stub | Package marker. Empty. |
-| [`src/qsma/utils/models.py`](src/qsma/utils/models.py) | ✅ Implemented | **Canonical inter-module contracts (Pydantic).** Do NOT redefine these in individual modules. Contains: `QuantumRisk` enum (CRITICAL/HIGH/MEDIUM/LOW/INFO), `Algorithm` enum (RSA, ECDSA, ECDH, DSA, DH, AES-128/256, DES, 3DES, MD5, SHA-1/256/384/512, post-quantum targets ML-KEM/ML-DSA/FN-DSA/SLH-DSA), `MigrationStatus` enum, `CodeLocation` model (file, line_start, line_end, column, snippet), `CryptoFinding` model (id, algorithm, risk, location, usage_type, library, severity_score, explanation, recommendation, migration_status), `MigrationPlan` model (finding_id, strategy, target_algorithm, description, complexity, dependencies, hints), `TransformationResult` model (finding_id, success, original/transformed snippet, files_modified, error), `ValidationResult` model (passed, build_ok, tests_ok, summary, regressions, warnings), `ScanReport` model (target_path, findings list, counts, transformation_results, validation_result, duration). |
+| [`src/qsma/utils/models.py`](src/qsma/utils/models.py) | ✅ Implemented | **Canonical inter-module contracts (Pydantic).** Do NOT redefine these in individual modules. Contains: `QuantumRisk` enum, `Algorithm` enum (including post-quantum targets), `MigrationStatus` enum, `CodeLocation`, `CryptoFinding`, `MigrationPlan`, `TransformationResult`, `ValidationResult`, `ScanReport`. **To add:** `MigrationSessionState` — LangGraph state model (session_id, pending_plans, completed, retry_count, retry_hints). |
+| [`src/qsma/utils/session.py`](src/qsma/utils/session.py) | 🔲 Stub | **Planned (Phase 2):** Redis session manager. Serialize/deserialize `MigrationSessionState`. `get_session(id)`, `save_session(state)`, `delete_session(id)`. Falls back to in-memory if Redis unavailable. |
 | [`src/qsma/llm/__init__.py`](src/qsma/llm/__init__.py) | Stub | Package marker. Empty. |
-| [`src/qsma/llm/client.py`](src/qsma/llm/client.py) | ✅ Implemented | **Provider-agnostic LLM client.** Class `LLMClient(provider, api_key, base_url, model, max_tokens, temperature)`. Public method: `chat(messages, model, max_tokens, temperature) → str`. Internal methods: `_init_watsonx()`, `_init_openai_compatible()`, `_init_anthropic_compatible()`, `_get_client()` (lazy init), `_chat_watsonx()`, `_chat_openai()`, `_chat_anthropic()`. Prompt-builder functions: `migration_plan_prompt(finding_summary, code_snippet, algorithm, target_algorithm) → list[dict]`, `code_transform_prompt(original_code, algorithm, target_algorithm, hints) → list[dict]`. Error class: `LLMError(RuntimeError)`. Providers: `watsonx` (default, `ibm-watsonx-ai` SDK), `openai_compatible` (`openai` SDK, any compatible endpoint), `anthropic_compatible` (`anthropic` SDK), `mock` (returns stub JSON for unit tests). Switch provider via `LLM_PROVIDER` env var — zero code change. |
-| [`src/qsma/ingestion/__init__.py`](src/qsma/ingestion/__init__.py) | 🔲 Stub | Empty. Planned: file walker, `CodebaseSnapshot`, `IngestionConfig`. |
-| [`src/qsma/analyzer/__init__.py`](src/qsma/analyzer/__init__.py) | 🔲 Stub | Empty. Planned: AST parser (libcst), call graph builder, `AnalyzedCodebase`. |
-| [`src/qsma/detector/__init__.py`](src/qsma/detector/__init__.py) | 🔲 Stub | Empty. Planned: pattern matching against `AnalyzedCodebase`, produces `list[CryptoHit]`. |
-| [`src/qsma/classifier/__init__.py`](src/qsma/classifier/__init__.py) | 🔲 Stub | Empty. Planned: quantum risk scoring, severity, produces `list[CryptoFinding]`. |
-| [`src/qsma/planner/__init__.py`](src/qsma/planner/__init__.py) | 🔲 Stub | Empty. Planned: per-finding strategy selection (deterministic or LLM-assisted), produces `MigrationPlan`. |
-| [`src/qsma/migrator/__init__.py`](src/qsma/migrator/__init__.py) | 🔲 Stub | Empty. Planned: libcst AST transforms (deterministic path) + LLM-assisted rewrite (complex cases), produces `TransformationResult`. |
-| [`src/qsma/validator/__init__.py`](src/qsma/validator/__init__.py) | 🔲 Stub | Empty. Planned: build check, test runner, regression detection, produces `ValidationResult`. |
+| [`src/qsma/llm/client.py`](src/qsma/llm/client.py) | ✅ Implemented | **Provider-agnostic LLM client.** Class `LLMClient`. Providers: `watsonx` (default), `openai_compatible`, `anthropic_compatible`, `mock`. Switch via `LLM_PROVIDER` env var. Called by LangGraph agent nodes — never called directly by pipeline modules. |
+| [`src/qsma/llm/training_data/`](src/qsma/llm/training_data/) | 🔲 Stub | **Planned (Phase 2):** Few-shot migration examples (`few_shot/*.json`) and agent system prompts (`prompts/*.txt`). One JSON file per algorithm-family migration pair. Loaded at agent startup. See ADR-009. |
+| [`src/qsma/agent/__init__.py`](src/qsma/agent/__init__.py) | 🔲 Stub | **Planned (Phase 2):** Package marker for LangGraph agent graph. |
+| [`src/qsma/agent/graph.py`](src/qsma/agent/graph.py) | 🔲 Stub | **Planned (Phase 2):** LangGraph `StateGraph` wiring `planner_node → migrator_node → validator_node`. Conditional edges for retry (≤3) and escalation. Redis checkpointer via `RedisSaver`. See ADR-007. |
+| [`src/qsma/ingestion/__init__.py`](src/qsma/ingestion/__init__.py) | 🔲 Stub | Empty. Planned: file walker, `CodebaseSnapshot`, `IngestionConfig`. Language detection by file extension. |
+| [`src/qsma/analyzer/__init__.py`](src/qsma/analyzer/__init__.py) | 🔲 Stub | Empty. Planned: **tree-sitter** multi-language AST parser (all languages) + libcst CST builder (Python only). Produces `AnalysisResult` with `ParsedFile` per source file. See ADR-006. |
+| [`src/qsma/detector/__init__.py`](src/qsma/detector/__init__.py) | 🔲 Stub | Empty. Planned: tree-sitter query-based pattern matching across all languages, produces `list[CryptoHit]`. |
+| [`src/qsma/classifier/__init__.py`](src/qsma/classifier/__init__.py) | 🔲 Stub | Empty. Planned: quantum risk scoring, severity, produces `list[CryptoFinding]`. Deterministic — no LLM. |
+| [`src/qsma/planner/__init__.py`](src/qsma/planner/__init__.py) | 🔲 Stub | Empty. Planned: **LangGraph node** `planner_node(state)`. Always calls LLM: produces `MigrationPlan` (target algorithm, dependency changes, transformation hints) from `CryptoFinding` + few-shot examples. NIST target table is prompt context, not hard-coded rules. Persists to Redis. |
+| [`src/qsma/migrator/__init__.py`](src/qsma/migrator/__init__.py) | 🔲 Stub | Empty. Planned: **LangGraph node** `migrator_node(state)`. Fully LLM-driven: builds prompt from `MigrationPlan` + code context + few-shot examples → calls `LLMClient` → splices result into source file via libcst patcher. Retries on Validator signal (max 3). Persists per-file result to Redis. |
+| [`src/qsma/validator/__init__.py`](src/qsma/validator/__init__.py) | 🔲 Stub | Empty. Planned: **LangGraph node** `validator_node(state)`. Syntax check + test run + LLM failure analysis. Routes: pass → Reporter, retry → migrator_node, escalate → MANUAL_REQUIRED. |
 | [`src/qsma/reporter/__init__.py`](src/qsma/reporter/__init__.py) | 🔲 Stub | Empty. Planned: CLI output formatter (text/JSON/markdown), consumes `ScanReport`. |
 
 ### Tests
@@ -98,37 +102,40 @@ The agreed end-to-end pipeline. All stages exist as empty stubs except CLI, mode
 ```
 User
   │
-  │  qsma scan <path>  /  qsma migrate <path>  /  qsma report  /  qsma validate
+  │  qsma scan <path>  /  qsma migrate <path> [--resume <id>]  /  qsma report  /  qsma validate
   ▼
 ┌──────────────────────────────────────────────────┐
 │  CLI  (src/qsma/cli/main.py)                     │
 │  Click group — thin entry point only             │
 │  Delegates all logic to domain modules below     │
+│  migrate: --resume <session_id> resumes from     │
+│           Redis session state (ADR-008)          │
 └───────────────────────┬──────────────────────────┘
                         │
                         ▼
 ┌──────────────────────────────────────────────────┐
 │  Ingestion  (src/qsma/ingestion/)                │
 │  • Walks target directory (respects .gitignore)  │
-│  • Reads source files, applies extension filter  │
-│  • Produces: CodebaseSnapshot                    │
+│  • Reads source files, detects language by ext   │
+│  • Produces: CodebaseSnapshot (SourceFile list)  │
 └───────────────────────┬──────────────────────────┘
                         │ CodebaseSnapshot
                         ▼
 ┌──────────────────────────────────────────────────┐
 │  Analyzer  (src/qsma/analyzer/)                  │
-│  • Parses each file with libcst (not ast module) │
-│  • Extracts: imports, function calls, call graph │
-│  • Tracks: ImportRef, CallSite, file→symbol map  │
-│  • Produces: AnalyzedCodebase                    │
+│  • PRIMARY: tree-sitter — all languages          │
+│    Parses imports, call sites, identifiers       │
+│  • SECONDARY: libcst — Python only               │
+│    Builds cst_tree for lossless Migrator use     │
+│  • Produces: AnalysisResult (ParsedFile list)    │
 └───────────────────────┬──────────────────────────┘
-                        │ AnalyzedCodebase
+                        │ AnalysisResult
                         ▼
 ┌──────────────────────────────────────────────────┐
 │  Detector  (src/qsma/detector/)                  │
-│  • Pattern-matches known crypto library usage    │
-│  • Distinguishes import from actual call site    │
-│  • Uses rule definitions (pattern library)       │
+│  • tree-sitter query-based pattern matching      │
+│  • Works across ALL supported languages          │
+│  • Per-language crypto pattern libraries         │
 │  • Produces: list[CryptoHit]  (raw, unclassified)│
 └───────────────────────┬──────────────────────────┘
                         │ list[CryptoHit]
@@ -142,34 +149,40 @@ User
 └───────────────────────┬──────────────────────────┘
                         │ list[CryptoFinding]
                         ▼  (user selects findings to migrate)
-┌──────────────────────────────────────────────────┐
-│  Planner  (src/qsma/planner/)                    │
-│  • Chooses migration strategy per finding        │
-│  • Deterministic path: known rewrite rules       │
-│  • LLM-assisted path: complex/unknown patterns   │
-│  • Uses: LLMClient (watsonx.ai by default)       │
-│  • Produces: MigrationPlan per selected finding  │
-└───────────────────────┬──────────────────────────┘
-                        │ MigrationPlan
-                        ▼
-┌──────────────────────────────────────────────────┐
-│  Migrator  (src/qsma/migrator/)                  │
-│  • Deterministic path: libcst AST transforms     │
-│  • LLM-assisted path: prompt → code rewrite      │
-│  • Updates parameters, key sizes, dependencies   │
-│  • Produces: TransformationResult per finding    │
-└───────────────────────┬──────────────────────────┘
-                        │ TransformationResult
-                        ▼
-┌──────────────────────────────────────────────────┐
-│  Validator  (src/qsma/validator/)                │
-│  • Runs build/compile check where applicable     │
-│  • Runs existing test suite if present           │
-│  • Detects regressions vs. pre-migration baseline│
-│  • Produces: ValidationResult                    │
-└───────────────────────┬──────────────────────────┘
-                        │ ValidationResult
-                        ▼
+┌─────────────────────────────────────────────────────────────┐
+│  LangGraph MigrationGraph  (src/qsma/agent/graph.py)        │
+│  StateGraph backed by Redis checkpointer (RedisSaver)       │
+│  State: MigrationSessionState (Pydantic, persisted to Redis)│
+│                                                             │
+│  ┌────────────────────────────────────────────────────┐     │
+│  │  planner_node  (src/qsma/planner/)                 │     │
+│  │  • LLM agent: reasons migration strategy per       │     │
+│  │    finding; NIST targets are prompt context        │     │
+│  │  • Loads training_data/few_shot/*.json             │     │
+│  │  • Produces: MigrationPlan, persists to Redis      │     │
+│  └──────────────────────────┬─────────────────────────┘     │
+│                             │ MigrationPlan                  │
+│                             ▼                               │
+│  ┌────────────────────────────────────────────────────┐     │
+│  │  migrator_node  (src/qsma/migrator/)               │     │
+│  │  • LLM agent: generates transformed code snippet   │     │
+│  │  • libcst patcher splices snippet into source file │     │
+│  │  • Persists TransformationResult to Redis          │     │
+│  └──────────────────────────┬─────────────────────────┘     │
+│                             │ TransformationResult           │
+│                             ▼                               │
+│  ┌────────────────────────────────────────────────────┐     │
+│  │  validator_node  (src/qsma/validator/)             │     │
+│  │  • Syntax check (ast.parse / tree-sitter)          │     │
+│  │  • Dependency check + test run                     │     │
+│  │  • LLM failure analysis → retry_hints              │     │
+│  │  • Routes: pass → Reporter                         │     │
+│  │            retry (attempt<3) → migrator_node       │     │
+│  │            escalate → MANUAL_REQUIRED              │     │
+│  └──────────────────────────┬─────────────────────────┘     │
+└─────────────────────────────┼───────────────────────────────┘
+                              │ ValidationResult
+                              ▼
 ┌──────────────────────────────────────────────────┐
 │  Reporter  (src/qsma/reporter/)                  │
 │  • Formats output: text / JSON / markdown        │
@@ -177,26 +190,43 @@ User
 │  • Writes to stdout or --output file             │
 └──────────────────────────────────────────────────┘
 
-Shared infrastructure (used by Planner + Migrator only):
+Shared infrastructure:
 ┌──────────────────────────────────────────────────┐
 │  LLM Client  (src/qsma/llm/client.py)            │
 │  • Provider-agnostic: watsonx / openai / anthropic│
-│  • Switch via LLM_PROVIDER env var only          │
+│  • Called by LangGraph agent nodes only          │
 │  • Mock provider available for unit tests        │
+└──────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────┐
+│  Session Manager  (src/qsma/utils/session.py)    │
+│  • Redis read/write for MigrationSessionState    │
+│  • TTL: 24h (REDIS_SESSION_TTL_SECONDS in .env)  │
+│  • Fallback: in-memory if Redis unavailable      │
+└──────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────┐
+│  Agent Training Data                             │
+│  (src/qsma/llm/training_data/)                   │
+│  • few_shot/*.json — per-algorithm few-shot pairs│
+│  • prompts/*.txt   — agent system prompts        │
+│  • Loaded at agent startup; version-controlled   │
 └──────────────────────────────────────────────────┘
 
 Inter-module data contracts (all defined in src/qsma/utils/models.py):
   CodeLocation · CryptoFinding · MigrationPlan
   TransformationResult · ValidationResult · ScanReport
+  MigrationSessionState (LangGraph state — includes session_id, pending_plans,
+    completed_findings, retry_count, retry_hints)
   QuantumRisk · Algorithm · MigrationStatus  (enums)
 ```
 
 **Key technology decisions:**
-- **libcst** (not Python `ast`) for AST — preserves comments and formatting on roundtrip
+- **tree-sitter** (primary parser) for multi-language AST in Analyzer + Detector — 40+ languages, single query API
+- **libcst** (Python-only, Migrator only) for lossless CST roundtrip — preserves comments and formatting
+- **LangGraph ≥ 0.2** for agentic Planner → Migrator → Validator loop with typed state and retry
+- **Redis** for session state persistence — mid-run resume via `--resume <session_id>`
 - **IBM watsonx.ai** as default LLM (Granite Code model) — switch via `.env` only
-- **Pydantic** for all inter-module data models — single file, single source of truth
+- **Pydantic v2** for all inter-module data models including `MigrationSessionState`
 - **Click + Rich** for CLI — thin layer, no business logic in CLI module
-- **Stateless** — no database; optional JSON scan cache in `.qsma_cache/`
 
 ---
 

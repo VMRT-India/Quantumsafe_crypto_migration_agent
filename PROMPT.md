@@ -188,7 +188,7 @@ knows exactly what changed and why.
 ### Scopes (use the module name)
 
 `cli` · `ingestion` · `analyzer` · `detector` · `classifier` · `planner`
-`migrator` · `validator` · `reporter` · `llm` · `models` · `tests` · `config` · `docs`
+`migrator` · `validator` · `reporter` · `llm` · `agent` · `session` · `models` · `tests` · `config` · `docs`
 
 ### Good commit message examples
 
@@ -249,46 +249,42 @@ or make a technology decision — update `PROJECT_CONTEXT.md` in the same commit
 
 ## Step 8 — LLM provider
 
-The LLM client (`src/qsma/llm/`) uses an **OpenAI-compatible Chat Completions API**.
+The LLM client (`src/qsma/llm/client.py`) is **provider-agnostic**. Default is IBM watsonx.ai.
 
-This means it works with any of:
+| `LLM_PROVIDER` value | SDK | Credentials |
+|---|---|---|
+| `watsonx` *(default)* | `ibm-watsonx-ai` | `WATSONX_API_KEY`, `WATSONX_PROJECT_ID`, `WATSONX_URL` |
+| `openai_compatible` | `openai` | `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` |
+| `anthropic_compatible` | `anthropic` | `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` |
 
-- **OpenAI** (`gpt-4o`, `gpt-4`, etc.)
-- **Anthropic** (via OpenAI-compatible gateway)
-- **IBM watsonx.ai** (via its OpenAI-compatible endpoint)
-- Any self-hosted or third-party provider that implements the OpenAI chat API
+**No code change is needed to switch providers — only `.env` changes.**
 
-**No code change is needed to switch providers.**
-The active provider is selected entirely through `.env`:
+See `.env.example` for all variables. See `src/qsma/llm/client.py` for the implementation.
 
-```
-LLM_API_KEY=sk-...             # provider API key
-LLM_BASE_URL=https://...       # base URL (leave blank for OpenAI default)
-LLM_MODEL=gpt-4o               # model identifier
-```
+The LLM is used in **all three migration agents** (Planner, Migrator, Validator — all LangGraph nodes):
+- **Planner** — reasons about migration strategy; produces `MigrationPlan`
+- **Migrator** — generates transformed code from the original snippet + plan
+- **Validator** — interprets test/syntax failures; produces `retry_hints` for Migrator
 
-See `.env.example` for all variables.
-See `src/qsma/llm/client.py` for the implementation.
-
-The LLM is used **only** in the Planner (strategy generation) and Migrator
-(complex pattern transformation). Detection and classification are always
-deterministic — they never call the LLM.
+The LLM is **not** used in: Ingestion, Analyzer, Detector, Classifier — these are fully deterministic.
 
 ---
 
 ## Step 9 — Data storage and caching
 
-This tool is **stateless by default**. It reads source files from disk, runs
-the pipeline in memory, and produces output. There is no database.
-
 | Mechanism | Purpose | Location | Phase |
 |---|---|---|---|
-| **JSON scan cache** | Avoid re-scanning unchanged files | `.qsma_cache/<hash>.json` | Phase 1 |
-| **In-process finding registry** | `dict[finding_id → CryptoFinding]` per CLI run | `src/qsma/utils/registry.py` | Phase 1 |
-| **No persistent database** | No SQLite, no external DB — out of MVP scope | — | Never (MVP) |
-| **No inter-run state** | Each `qsma scan` starts fresh unless `--cache` flag used | — | Phase 1 |
+| **Redis session cache** | Store `MigrationSessionState` per session; enable `--resume` | `REDIS_URL` in `.env` (default `redis://localhost:6379`) | Phase 2 |
+| **JSON scan cache** | Avoid re-scanning unchanged files between `qsma scan` runs | `.qsma_cache/<sha256-hash>.json` | Phase 1 |
+| **In-process finding registry** | `dict[finding_id → CryptoFinding]` per CLI invocation | `src/qsma/utils/registry.py` | Phase 1 |
+| **Agent training data** | Few-shot examples + system prompts for LangGraph agents | `src/qsma/llm/training_data/` | Phase 2 |
+| **No persistent DB** | No SQLite, PostgreSQL — out of MVP scope | — | Out of scope |
 
-Cache key: `sha256` of sorted `(file_path, mtime)` pairs for the scanned tree.
+**Redis** (`src/qsma/utils/session.py`) is optional at runtime — if unavailable, the tool runs in
+stateless mode (no `--resume` capability) and prints a warning. TTL: 24h (configurable via
+`REDIS_SESSION_TTL_SECONDS` in `.env`).
+
+**JSON scan cache key:** `sha256` of sorted `(file_path, mtime_ns)` pairs.
 A changed file invalidates only that file's findings, not the entire scan.
 
 ---
@@ -317,13 +313,15 @@ A changed file invalidates only that file's findings, not the entire scan.
 | What task to work on? | `PROJECT_CONTEXT.md §17` |
 | What ADRs constrain me? | `PROJECT_CONTEXT.md §14` |
 | Which branch is mine? | `PROJECT_CONTEXT.md §10` |
-| What LLM provider is configured? | `.env` → `LLM_MODEL`, `LLM_BASE_URL` |
+| What LLM provider is configured? | `.env` → `LLM_PROVIDER`, `LLM_MODEL`, `LLM_BASE_URL` |
 | What env vars are needed? | `.env.example` |
 | How to write commit messages? | `PROMPT.md §7` (this file) |
 | Can I change the DAG? | Yes — see `PROMPT.md §6` |
 | Can I change `models.py`? | Yes, with PR + ADR — see `PROMPT.md §6` |
-| Is there a database? | No — see `PROMPT.md §9` |
-| Is there caching? | JSON cache on disk — see `PROMPT.md §9` |
+| Is there a database? | No persistent DB. Redis for session state — see `PROMPT.md §9` |
+| Is there caching? | Redis (session) + JSON scan cache — see `PROMPT.md §9` |
+| What is the migration strategy for all findings? | LLM-agentic (Planner→Migrator→Validator); no deterministic rewrite — see ADR-002 |
+| Can I add a rule-based transform path to Migrator? | No — see ADR-002 and ADR-003 |
 | Where do session screenshots go? | `bob_sessions/<YourName>/` — see `PROMPT.md §4` |
 
 ---

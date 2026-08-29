@@ -85,21 +85,23 @@ cryptography has been migrated and validated" in a single automated workflow.
 
 | Area | Detail |
 |---|---|
-| Language support | Python (primary target) |
+| Language support | Python (primary); Java, Go, C, Rust via tree-sitter parsing (detection only — AST transforms remain Python/libcst for MVP) |
 | Detection | RSA, ECDSA, ECDH, DSA, DH, AES-128, DES, 3DES, MD5, SHA-1 |
-| Libraries detected | `cryptography`, `pycryptodome`, `hashlib`, `hmac`, `ssl`, `paramiko` |
+| Libraries detected | `cryptography`, `pycryptodome`, `hashlib`, `hmac`, `ssl`, `paramiko` (Python); standard crypto APIs per language (Java, Go, C, Rust) |
 | Risk classification | CRITICAL / HIGH / MEDIUM / LOW / INFO |
 | Migration targets | ML-KEM (Kyber), ML-DSA (Dilithium), AES-256, SHA-256+ |
-| Migration method | Deterministic AST rewrites (primary) + LLM-assisted (fallback/complex cases) |
-| Validation | Syntax check, optional `pytest` execution, optional `pip install` check |
-| CLI interface | `scan`, `report`, `migrate`, `validate` commands |
-| IBM technology | watsonx.ai (Granite Code model) for LLM-assisted migration |
+| Migration method | Deterministic AST rewrites (primary, Python only via libcst) + LangGraph agentic loop (Planner → Migrator → Validator → retry) + LLM-assisted fallback |
+| Validation | Syntax check, optional `pytest` execution, optional `pip install` check; validator feeds back into LangGraph retry loop |
+| CLI interface | `scan`, `report`, `migrate`, `validate` commands; `--resume <session_id>` for interrupted runs |
+| IBM technology | watsonx.ai (Granite Code model) as default LLM backend for LangGraph agents |
 | Output formats | terminal (rich), JSON, Markdown |
+| Session persistence | Redis — stores pipeline state per session; enables mid-run resume |
+| Agent training data | `src/qsma/llm/training_data/` — few-shot examples + prompt templates per algorithm family |
 
 ### Explicitly out of scope (MVP)
 
 - Web UI / dashboard
-- Multi-language support beyond Python (Java, Go, C++ — architecture allows extension)
+- AST-level code transforms for non-Python languages (detection works; automated rewrite is Python-only for MVP)
 - IDE plugins
 - CI/CD pipeline integration (design for it, but don't implement)
 - Automatic key rotation / secrets management
@@ -167,16 +169,49 @@ cryptography has been migrated and validated" in a single automated workflow.
 ### LLM integration point
 
 The LLM (watsonx.ai / Granite Code) is used **only** in:
-1. **Planner** — generating migration strategies for complex/unknown patterns
-2. **Migrator** — LLM-assisted transformation when deterministic rules are insufficient
-3. **Classifier** — optional enrichment of explanation text (can be disabled)
+1. **Planner agent** — LangGraph node: reasons about migration strategy; multi-step for complex/unknown patterns
+2. **Migrator agent** — LangGraph node: applies transformation; iterates if Validator reports failure
+3. **Validator agent** — LangGraph node: interprets test failures; signals retry to Migrator or escalates to manual
+4. **Classifier** — optional enrichment of explanation text (can be disabled)
 
 The LLM is **not** used for detection or risk classification — these are deterministic.
+
+### Agentic loop (Planner → Migrator → Validator)
+
+```
+list[CryptoFinding]
+        │
+        ▼
+┌─────────────────────────────────────────────────────┐
+│  LangGraph  MigrationGraph                          │
+│                                                     │
+│  ┌──────────┐    plan     ┌──────────┐              │
+│  │ Planner  ├────────────►│ Migrator │              │
+│  │  agent   │             │  agent   │              │
+│  └──────────┘             └────┬─────┘              │
+│        ▲                       │ TransformationResult│
+│        │  retry (replan)       ▼                    │
+│        │               ┌──────────────┐             │
+│        └───────────────┤  Validator   │             │
+│                        │   agent      │             │
+│                        └──────┬───────┘             │
+│                               │ pass / escalate     │
+└───────────────────────────────┼─────────────────────┘
+                                ▼
+                        ValidationResult
+```
+
+- Each node is a LangGraph `StateGraph` node backed by `LLMClient` (watsonx.ai)
+- State is a `MigrationSessionState` Pydantic model persisted to Redis per session
+- Max retry depth: 3 (configurable). After 3 failures → `MigrationStatus.MANUAL_REQUIRED`
+- Deterministic findings bypass the agent loop entirely (direct libcst transform)
 
 ### Shared utilities
 
 `src/qsma/utils/models.py` — Pydantic data models (the shared contract layer)
 `src/qsma/llm/` — watsonx.ai client wrapper, prompt templates, response parsing
+`src/qsma/llm/training_data/` — few-shot migration examples + prompt templates (JSON/YAML per algorithm family)
+`src/qsma/utils/session.py` — Redis session manager; serialize/deserialize `MigrationSessionState`
 
 ---
 
@@ -184,17 +219,18 @@ The LLM is **not** used for detection or risk classification — these are deter
 
 | Module | Package | Responsibility |
 |---|---|---|
-| CLI | `qsma.cli` | Command routing, user interaction, progress display |
+| CLI | `qsma.cli` | Command routing, user interaction, progress display; `--resume` flag |
 | Ingestion | `qsma.ingestion` | Filesystem walk, file filtering, raw source collection |
-| Analyzer | `qsma.analyzer` | AST parsing, call graph, import resolution |
-| Detector | `qsma.detector` | Pattern matching on AST nodes to find crypto usage |
+| Analyzer | `qsma.analyzer` | Multi-language AST parsing via tree-sitter (all languages) + libcst for Python structural analysis |
+| Detector | `qsma.detector` | Pattern matching on tree-sitter AST nodes to find crypto usage across languages |
 | Classifier | `qsma.classifier` | Risk scoring, algorithm identification, recommendation |
-| Planner | `qsma.planner` | Migration strategy selection per finding |
-| Migrator | `qsma.migrator` | Code transformation (AST rewrite + LLM fallback) |
-| Validator | `qsma.validator` | Post-migration build/test validation |
+| Planner | `qsma.planner` | **LangGraph agent node** — migration strategy reasoning per finding |
+| Migrator | `qsma.migrator` | **LangGraph agent node** — code transformation (libcst deterministic + LLM-assisted) |
+| Validator | `qsma.validator` | **LangGraph agent node** — post-migration build/test validation; feeds back to Migrator on failure |
 | Reporter | `qsma.reporter` | Output formatting (terminal, JSON, Markdown) |
-| LLM Client | `qsma.llm` | watsonx.ai SDK wrapper, prompt templates |
-| Models | `qsma.utils.models` | Shared Pydantic data-models (contracts) |
+| LLM Client | `qsma.llm` | watsonx.ai SDK wrapper, prompt templates, few-shot training data loader |
+| Session | `qsma.utils.session` | Redis-backed session state manager; serialize/resume `MigrationSessionState` |
+| Models | `qsma.utils.models` | Shared Pydantic data-models (contracts) including `MigrationSessionState` |
 
 ---
 
@@ -230,22 +266,33 @@ CodebaseSnapshot   — list[SourceFile], root_path, file_count
 
 ### 6.2 Analyzer (`qsma.analyzer`)
 
-**Purpose:** Parse source files into ASTs and extract structural information.
+**Purpose:** Parse source files into language-specific ASTs and extract structural information for all supported languages.
 
 **Inputs:** `CodebaseSnapshot`
-**Outputs:** `AnalysisResult` — per-file AST + import map + call sites
+**Outputs:** `AnalysisResult` — per-file parsed tree + import map + call sites
 
 **Responsibilities:**
-- Parse each `SourceFile` using `libcst` (Python MVP)
-- Extract: imports, function definitions, class definitions, call expressions
+- Detect the language of each `SourceFile` by extension (`.py`, `.java`, `.go`, `.c`, `.rs`, etc.)
+- Parse each file using **tree-sitter** (universal parser for all languages)
+- For Python files, additionally build a `libcst` CST tree (stored alongside — needed by Migrator for lossless transforms)
+- Extract: imports, function definitions, class definitions, call expressions — via tree-sitter query language
 - Build a lightweight intra-file call graph
-- Identify which imports are cryptographic in origin (using an import allowlist)
+- Identify which imports are cryptographic in origin (using a per-language import allowlist)
+
+**Language support matrix:**
+| Language | Parser | Detection | AST Transform |
+|---|---|---|---|
+| Python | tree-sitter + libcst | ✅ | ✅ libcst (lossless) |
+| Java | tree-sitter | ✅ | ❌ manual only (MVP) |
+| Go | tree-sitter | ✅ | ❌ manual only (MVP) |
+| C / C++ | tree-sitter | ✅ | ❌ manual only (MVP) |
+| Rust | tree-sitter | ✅ | ❌ manual only (MVP) |
 
 **Key classes:**
 ```
-ParsedFile     — path, cst_tree, imports, call_sites
-ImportRef      — module, alias, line
-CallSite       — function_name, arguments, line, enclosing_function
+ParsedFile     — path, language, ts_tree, cst_tree (Python only), imports, call_sites
+ImportRef      — module, alias, line, language
+CallSite       — function_name, arguments, line, enclosing_function, language
 AnalysisResult — list[ParsedFile], import_index
 ```
 
@@ -313,82 +360,95 @@ CryptoHit      — rule_id, algorithm_hint, usage_type, location, raw_node_info
 
 ### 6.5 Planner (`qsma.planner`)
 
-**Purpose:** For each selected CryptoFinding, produce an actionable MigrationPlan.
+**Purpose:** For each selected `CryptoFinding`, reason about the correct migration strategy and produce an actionable `MigrationPlan`. Implemented as a **LangGraph agent node** — always calls the LLM.
 
-**Inputs:** `list[CryptoFinding]` (selected subset)
-**Outputs:** `list[MigrationPlan]`
+**Inputs:** `list[CryptoFinding]` (selected subset), `MigrationSessionState` (from Redis)
+**Outputs:** `list[MigrationPlan]`, updated `MigrationSessionState`
 
 **Responsibilities:**
-- Select migration strategy: deterministic_rewrite | llm_assisted | manual_only
-- Identify target algorithm (NIST PQC standard)
-- Determine if dependency changes are needed (`requirements.txt` additions)
-- Generate `transformation_hints` for the Migrator
+- Call `LLMClient` with a structured prompt that includes: the detected algorithm, the usage type, the code snippet, the NIST PQC target, and relevant few-shot examples from `training_data/few_shot/`
+- Parse the LLM response into a `MigrationPlan`: target algorithm, required dependency changes (`requirements.txt` / `go.mod` / `pom.xml`), and `transformation_hints` for the Migrator
+- For non-Python findings where automated migration is not supported: produce `MigrationPlan(strategy=manual_only)` with an explanation — no LLM call needed
+- Persist each `MigrationPlan` to Redis session as it is produced (enables resume)
 
-**Strategy selection logic:**
+**Target algorithm mapping (provided as context in the LLM prompt — not hard-coded rules):**
 ```
-RSA sign/verify  → deterministic → ML-DSA (Dilithium)
-ECDSA sign/verify → deterministic → ML-DSA (Dilithium)
-ECDH key exchange → deterministic → ML-KEM (Kyber)
-AES-128 encrypt  → deterministic → AES-256 (key size increase)
-DES / 3DES       → deterministic → AES-256
-Unknown patterns → llm_assisted
+RSA  (any usage)   → ML-DSA (Dilithium)   FIPS 204
+ECDSA, DSA, DH     → ML-DSA (Dilithium)   FIPS 204
+ECDH               → ML-KEM (Kyber)       FIPS 203
+AES-128, DES, 3DES → AES-256              NIST SP 800-131A
+Unknown            → LLM reasons freely   (no pre-set target)
+Non-Python         → manual_only          (detection report only)
 ```
 
-**LLM use:** Called when strategy == `llm_assisted` to produce structured transformation hints.
+**LangGraph node:** `planner_node(state: MigrationSessionState) → MigrationSessionState`
+- Calls `LLMClient` for every Python finding; parses structured JSON `MigrationPlan` from response
+- Routes directly to `migrator_node` per finding
 
-**Depends on:** Classifier output (list[CryptoFinding]), LLM Client (optional)
+**Depends on:** Classifier output (list[CryptoFinding]), LLM Client, Session (Redis), training_data/
 
 ---
 
 ### 6.6 Migrator (`qsma.migrator`)
 
-**Purpose:** Apply the MigrationPlan to source files and produce modified code.
+**Purpose:** Transform source files from quantum-vulnerable crypto to NIST PQC equivalents. Fully LLM-driven. Implemented as a **LangGraph agent node** that retries on Validator feedback.
 
-**Inputs:** `list[MigrationPlan]`, `CodebaseSnapshot` (for file content access)
-**Outputs:** `list[TransformationResult]`
+**Inputs:** `list[MigrationPlan]`, `CodebaseSnapshot`, `MigrationSessionState` (from Redis)
+**Outputs:** `list[TransformationResult]`, updated `MigrationSessionState`
 
 **Responsibilities:**
-- **Deterministic path:** Apply libcst-based CST transformations for known patterns
-  - Preserves formatting, comments, and surrounding code
-  - One `Transformer` class per algorithm-family migration
-- **LLM-assisted path:** For complex/unknown patterns, send context + plan to LLM,
-  parse the response, apply the proposed diff with validation
-- Write transformed files (dry-run mode: only produce diffs, no file writes)
-- Record what changed per finding
+- Receive a `MigrationPlan` from the Planner node (includes finding, target algorithm, transformation hints, few-shot examples)
+- Construct a prompt that contains: the original code snippet, the detected algorithm, the target algorithm, dependency context, and relevant few-shot examples from `training_data/`
+- Call `LLMClient` to generate the transformed code fragment
+- Use `libcst` to splice the LLM-produced fragment back into the source file at the detected location, preserving surrounding code, comments, and formatting (libcst is a file-write utility here — not the migration logic)
+- On first attempt failure signal from Validator: incorporate `retry_hints` into the next prompt and retry (max 3 attempts)
+- Write transformed files atomically (dry-run mode: produce diff only, no file writes)
+- Persist `TransformationResult` to Redis session after each file (enables resume)
 
 **Sub-modules:**
 ```
-migrator/transformers/  — one .py file per deterministic transformation rule
-migrator/llm_transform.py — LLM-assisted transformation handler
-migrator/patcher.py     — safely applies transformations to files
+migrator/llm_transform.py — builds LLM prompt from MigrationPlan + few-shot + code context; parses response
+migrator/patcher.py       — uses libcst to splice LLM output into source file at correct location (atomic write)
 ```
 
-**Safety invariants:**
-- A transformation MUST NOT modify code outside the identified finding's scope
-- All file modifications are atomic (write to temp → move on success)
-- Dry-run mode must produce identical output as real run, minus file writes
+**LangGraph node:** `migrator_node(state: MigrationSessionState) → MigrationSessionState`
+- Reads `state.pending_plans`, processes one finding at a time, writes result back to state
+- Routes to `validator_node` after each transform; routes back to self on retry signal from Validator
 
-**Depends on:** Planner (MigrationPlan), Ingestion (CodebaseSnapshot), LLM Client
+**Safety invariants:**
+- The LLM prompt MUST include the exact detected code snippet (from `CryptoFinding.location.snippet`) so the LLM has precise context
+- libcst splice MUST NOT modify code outside the finding's `line_start`–`line_end` range
+- All file modifications are atomic (write to temp → move on success)
+- Dry-run mode must produce the same diff as a real run, minus the file write
+- Non-Python files: produce `TransformationResult(success=False, error="non-Python transform not supported in MVP")`
+
+**Depends on:** Planner (MigrationPlan), Ingestion (CodebaseSnapshot), LLM Client, Session (Redis), training_data/
 
 ---
 
 ### 6.7 Validator (`qsma.validator`)
 
-**Purpose:** Verify post-migration correctness of the codebase.
+**Purpose:** Verify post-migration correctness of the codebase. Implemented as a **LangGraph agent node** that signals pass, retry, or escalate.
 
-**Inputs:** `list[TransformationResult]`, `target_path: Path`
-**Outputs:** `ValidationResult`
+**Inputs:** `list[TransformationResult]`, `target_path: Path`, `MigrationSessionState` (from Redis)
+**Outputs:** `ValidationResult`, updated `MigrationSessionState` with signal: `pass | retry | escalate`
 
 **Validation steps (in order):**
-1. **Syntax check** — parse all modified files with `ast.parse` (fast, always runs)
-2. **Dependency check** — if new packages required, attempt `pip install --dry-run`
+1. **Syntax check** — parse all modified files with `ast.parse` (Python) or tree-sitter (other languages); fast, always runs
+2. **Dependency check** — if new packages required, attempt `pip install --dry-run` (Python) or equivalent
 3. **Test execution** — if `pytest` / `unittest` tests exist, run them with timeout
 4. **Regression detection** — compare test results before/after migration
+5. **LLM failure analysis** — if tests fail, call `LLMClient` to interpret failure message and produce `retry_hints` for Migrator
+
+**LangGraph node:** `validator_node(state: MigrationSessionState) → MigrationSessionState`
+- On pass: set `state.current_finding_status = COMPLETED`; route to next finding or Reporter
+- On syntax/test failure (attempt < 3): set `state.retry_hints`; route back to `migrator_node`
+- On failure (attempt == 3): set `state.current_finding_status = MANUAL_REQUIRED`; route to Reporter
 
 **Not responsible for:** Functional correctness of the cryptographic replacement.
-That is guaranteed by the deterministic rules in the Migrator.
+That is the responsibility of the Migrator agent (LLM-generated code + retry loop) and the test suite.
 
-**Depends on:** Migrator (TransformationResult), filesystem (for test execution)
+**Depends on:** Migrator (TransformationResult), filesystem (for test execution), LLM Client, Session (Redis)
 
 ---
 
@@ -627,14 +687,15 @@ needing to inspect the code.
 
 ### Phase 2 — Migration Pipeline
 
-**Objective:** `qsma migrate <path>` rewrites RSA → ML-DSA and ECDH → ML-KEM correctly.
+**Objective:** `qsma migrate <path>` rewrites RSA → ML-DSA and ECDH → ML-KEM correctly via the LangGraph agentic loop.
 **Parallel tasks:** T-09 (Dev1), T-08+T-10 (Dev2), T-15+T-16 tests (Dev3), T-13 CLI (Dev4)
-**Integration point:** Planner → Migrator (deterministic) → Validator → Reporter
+**Integration point:** Planner agent → Migrator agent → Validator agent (→ retry loop) → Reporter
 **Definition of done:**
-- [ ] `qsma migrate` on python_rsa fixture produces valid Python that uses Dilithium
+- [ ] `qsma migrate` on python_rsa fixture produces valid Python that uses Dilithium (LLM-generated, agent loop)
 - [ ] `--dry-run` shows diff without writing files
-- [ ] Validator catches syntax errors in bad transformations
+- [ ] Validator agent catches syntax errors and triggers a retry with updated hints
 - [ ] `qsma validate` runs pytest on migrated fixture and reports pass/fail
+- [ ] `qsma migrate --resume <id>` correctly resumes an interrupted session from Redis
 
 ---
 
@@ -699,23 +760,76 @@ A migration test passes only when:
 | **Python 3.x** | Primary language | Team familiarity; excellent crypto + AST libraries |
 | **Click** | CLI framework | Mature, composable, well-tested |
 | **Rich** | Terminal output | Beautiful, zero-config tables/progress bars |
-| **libcst** | AST transformations | Lossless CST — preserves formatting/comments; unlike `ast` module which does not roundtrip |
-| **Pydantic v2** | Data models/contracts | Fast validation; typed interface enforcement between modules |
-| **ibm-watsonx-ai** | LLM integration (default) | Primary/default provider for IBM hackathon; Granite Code model; `LLM_PROVIDER=watsonx` |
-| **openai** *(optional extra)* | LLM integration (optional) | `pip install 'qsma[llm-openai]'`; any OpenAI-compatible endpoint; `LLM_PROVIDER=openai_compatible` |
-| **anthropic** *(optional extra)* | LLM integration (optional) | `pip install 'qsma[llm-anthropic]'`; any Anthropic-compatible endpoint; `LLM_PROVIDER=anthropic_compatible` |
+| **tree-sitter** | Multi-language AST parsing (Analyzer + Detector) | Universal grammar-based parser for 40+ languages; single consistent query API; primary parser for all language detection |
+| **libcst** | Lossless Python source roundtrip (Migrator output only) | After the LLM produces a transformed snippet, libcst is used to splice it into the original file without destroying surrounding formatting and comments. Not used for detection — only for clean file writes. |
+| **LangGraph ≥ 0.2** | Agentic orchestration — Planner, Migrator, Validator | Provider-agnostic `StateGraph`; conditional edges for retry loop; Redis checkpointer for session persistence. Planner, Migrator, and Validator are all LangGraph nodes backed by `LLMClient`. |
+| **Pydantic v2** | Data models/contracts + LangGraph state | Fast validation; typed interface enforcement between modules; `MigrationSessionState` is the LangGraph graph state |
+| **Redis** | Session state persistence + mid-run resume | LangGraph `RedisSaver` checkpointer; key: `qsma:session:<uuid4>`, TTL 24h. Falls back to stateless mode if unavailable. |
+| **ibm-watsonx-ai** | LLM backend (default) | Primary/default provider for IBM hackathon; Granite Code model; `LLM_PROVIDER=watsonx` |
+| **openai** *(optional extra)* | LLM backend (optional) | `pip install 'qsma[llm-openai]'`; any OpenAI-compatible endpoint; `LLM_PROVIDER=openai_compatible` |
+| **anthropic** *(optional extra)* | LLM backend (optional) | `pip install 'qsma[llm-anthropic]'`; any Anthropic-compatible endpoint; `LLM_PROVIDER=anthropic_compatible` |
+| **Qdrant** *(optional extra)* | Vector DB for tool/pattern retrieval | Only needed if the number of detection patterns or migration tools grows large enough to require semantic search. Install via `pip install 'qsma[qdrant]'`. Not required for MVP. |
 | **python-dotenv** | Env var loading | Standard approach; never hardcodes credentials |
 | **pytest** | Test framework | Standard; integrates with coverage |
 | **ruff** | Linting + formatting | Fast; replaces flake8 + isort + black |
 | **detect-secrets** | Secret scanning | Pre-commit integration; IBM security requirement |
 | **pre-commit** | Git hooks | Enforces quality + security gates before commits |
 
-### Why libcst over ast module
+### The migration pipeline is fully LLM-agentic — there is no "deterministic transform" path
 
-`ast` does not roundtrip (it cannot reconstruct source from an AST preserving
-comments and formatting). `libcst` operates on a Concrete Syntax Tree that preserves
-all whitespace, comments, and formatting, making it suitable for automated code
-transformation tools that must produce readable, PR-mergeable output.
+Every code migration (Planner → Migrator → Validator) is driven by LLM agents running inside
+LangGraph nodes. The LLM reads the `CryptoFinding` (which contains the detected code snippet,
+the algorithm, the usage type, and the NIST target), reasons about how to rewrite it, and
+produces the transformed code. The Validator agent then checks whether the result is syntactically
+valid and passes the existing test suite. If not, it produces `retry_hints` and routes back to
+the Migrator agent for another attempt (max 3).
+
+**Why not a rule-based rewriter?** No rule set can reliably rewrite arbitrary crypto call sites
+without breaking surrounding logic. Key sizes, parameter names, return types, serialisation formats,
+and dependent data structures are coupled in ways that differ across libraries, versions, and usage
+patterns. Only an LLM with context over the full call site can reason about all of these simultaneously
+and produce correct output.
+
+**The only "deterministic" parts of the system are:**
+- **Ingestion** — file walking; always reproducible
+- **Analyzer** — tree-sitter parsing; always reproducible
+- **Detector** — pattern matching; always reproducible
+- **Classifier** — risk scoring via fixed NIST risk table; always reproducible
+
+These four modules have zero LLM dependency. They exist to give the agents precise, grounded
+context — the exact file, line, code snippet, algorithm, and risk level — so the LLM agents
+can focus entirely on correct code transformation rather than discovery.
+
+### Role of libcst (file write only — not migration logic)
+
+`libcst` is **not** the migration engine. It is used only as a safe file-write mechanism:
+once the Migrator agent produces a transformed code snippet, libcst splices it back into
+the original source file at the correct location without disturbing surrounding code,
+comments, or formatting. This is necessary because the LLM produces a code fragment,
+not a whole file, and a raw string replacement would be brittle.
+
+### Why tree-sitter is the primary parser (not libcst)
+
+`libcst` is Python-only. `tree-sitter` provides grammar-based parsing for 40+ languages
+using a single, consistent query API. The Analyzer uses tree-sitter to extract imports,
+call sites, and identifiers from any supported language.
+
+### Why LangGraph (not a custom agent loop)
+
+LangGraph provides:
+- **Typed state graph** — `MigrationSessionState` flows through nodes; inspectable and debuggable
+- **Conditional edges** — `migrator_node → validator_node → migrator_node` retry with attempt count
+- **Provider-agnostic** — runs over watsonx.ai via `LLMClient` with zero code change to switch providers
+- **Redis checkpointer** — `RedisSaver` integrates natively; enables `--resume` with no extra plumbing
+
+### When to use Qdrant (optional, not MVP)
+
+Qdrant is a vector database. It is useful when the agent needs to **retrieve** the most
+relevant tool, rule, or example from a large collection before acting. For the MVP, the
+number of detection patterns and few-shot examples is small enough to fit in the prompt
+directly. If the pattern library grows large (hundreds of rules, many language variants),
+Qdrant can be added as a retrieval layer: the agent embeds the `CryptoFinding` description
+and retrieves the top-K relevant few-shot examples or migration tools before planning.
 
 ### LLM provider architecture
 
@@ -730,31 +844,35 @@ transformation tools that must produce readable, PR-mergeable output.
 
 **Switching provider = change `LLM_PROVIDER` (+ matching credentials) in `.env`. Zero code change.**
 
-The `openai_compatible` and `anthropic_compatible` values accept **any endpoint that
-implements those APIs** — not necessarily OpenAI or Anthropic specifically.
-This includes self-hosted models, corporate gateways, and other compatible services.
-
-The LLM is used **only** in:
-1. Planner — generating migration strategies for complex/ambiguous patterns
-2. Migrator — LLM-assisted transformation when deterministic rules are insufficient
+The LLM is used in **all three migration agents**:
+1. **Planner node** — reasons about migration strategy; produces `MigrationPlan` with target algorithm, dependency changes, and transformation hints
+2. **Migrator node** — reads the finding + plan + original code; produces transformed code snippet
+3. **Validator node** — interprets test/syntax failure output; produces `retry_hints` for the Migrator node
 
 NOT used for:
-- Detection (deterministic — must be 100% reproducible)
-- Risk classification (deterministic — based on fixed NIST risk table)
-- Validation (deterministic — syntax check + test execution)
+- Ingestion (file walking — no LLM)
+- Analyzer (tree-sitter parsing — no LLM)
+- Detector (pattern matching — no LLM)
+- Classifier (NIST risk table lookup — no LLM)
 
 ### Data storage and caching
 
-**This tool is stateless by default.** No database. No persistent state between runs.
-
 | Mechanism | Purpose | Location | Phase |
 |---|---|---|---|
-| **JSON scan cache** | Skip re-scanning unchanged files | `.qsma_cache/<sha256-hash>.json` | Phase 1 |
+| **Redis session cache** | Store `MigrationSessionState` per session; enable mid-run resume | `redis://localhost:6379` (configurable via `REDIS_URL` in `.env`) | Phase 2 |
+| **JSON scan cache** | Skip re-scanning unchanged files between `qsma scan` invocations | `.qsma_cache/<sha256-hash>.json` | Phase 1 |
 | **In-process registry** | `dict[finding_id → CryptoFinding]` within a single CLI invocation | `src/qsma/utils/registry.py` | Phase 1 |
-| **No database** | No SQLite, PostgreSQL, Redis — out of MVP scope | — | Out of scope |
-| **No inter-run persistent state** | Fresh scan each run unless `--cache` flag passed | — | Phase 1 flag |
+| **training_data/** | Agent few-shot examples + system prompts | `src/qsma/llm/training_data/` | Phase 2 |
+| **Qdrant** *(optional)* | Vector retrieval for large pattern/tool libraries | External service; `QDRANT_URL` in `.env` | Post-MVP |
+| **No persistent DB** | No SQLite, PostgreSQL — out of MVP scope | — | Out of scope |
 
-**Cache design:**
+**Redis session design:**
+- Key: `qsma:session:<uuid4>` → JSON-serialized `MigrationSessionState`
+- TTL: 24 hours (configurable via `REDIS_SESSION_TTL_SECONDS` in `.env`)
+- Resume: `qsma migrate --resume <session_id>` loads state from Redis, skips completed findings
+- Redis is **optional** — if unavailable, tool runs in stateless mode (no resume capability); a warning is printed
+
+**JSON scan cache design:**
 - Cache key: `sha256(sorted list of (absolute_file_path, file_mtime_ns))` for the scanned tree
 - A single changed file invalidates only that file's findings, not the whole scan
 - Cache is stored locally in `.qsma_cache/` (excluded from git via `.gitignore`)
@@ -779,24 +897,35 @@ Ingestion and Analyzer are designed to accept language hints for future extensio
 
 ---
 
-### ADR-002: Deterministic rules are primary; LLM is fallback
+### ADR-002: Detection and classification are deterministic; all migration is LLM-agentic
 
-**Date:** 2024 (Phase 0)
-**Decision:** Detection and risk classification are always deterministic.
-LLM is used only for migration planning and transformation of complex patterns.
-**Reason:** Security-sensitive classification must be auditable and reproducible.
-LLM outputs for cryptographic recommendations must not vary across runs.
-**Impact:** Detector and Classifier have zero LLM dependency.
+**Date:** 2024 (Phase 0) — **revised 2025**
+**Decision:** Detection (Ingestion → Analyzer → Detector → Classifier) is always deterministic
+and has zero LLM dependency. All migration work (Planner, Migrator, Validator) is LLM-agentic
+via LangGraph nodes backed by watsonx.ai.
+**Reason:** Detection and risk classification must be auditable, reproducible, and fast — a rule-based
+system is the right tool. Code transformation cannot be reliably rule-based because crypto call sites
+are coupled to key sizes, parameter names, return types, serialisation formats, and dependent structures
+in ways that vary per library, version, and usage pattern. Only an LLM with full call-site context can
+reason about all of these and produce correct output.
+**Impact:** Detector and Classifier have zero LLM dependency. Planner, Migrator, and Validator are
+all LangGraph nodes — there is no "deterministic transform" path in the Migrator.
+**Supersedes:** The original ADR-002 which framed LLM as a fallback. LLM is now the primary migration engine.
 **Status:** Accepted
 
 ---
 
-### ADR-003: libcst for code transformation
+### ADR-003: libcst for safe file write after LLM-generated transform (not migration logic)
 
-**Date:** 2024 (Phase 0)
-**Decision:** Use `libcst` for all Python AST transformations in the Migrator.
-**Reason:** Lossless CST; preserves formatting/comments; purpose-built for codemods.
-**Impact:** Migrator module requires libcst. All transformers extend `libcst.CSTTransformer`.
+**Date:** 2024 (Phase 0) — **revised 2025**
+**Decision:** `libcst` is used only to splice the LLM-produced code snippet back into the original
+source file at the correct location, preserving surrounding formatting and comments.
+**Reason:** The LLM produces a transformed code fragment, not a whole file. A raw string replacement
+at the detected line range would be brittle. `libcst` provides a lossless CST roundtrip that inserts
+the new fragment precisely without disturbing surrounding code.
+**Impact:** `libcst` is a file-write utility in the Migrator, not the migration logic itself.
+There are no `libcst.CSTTransformer` subclasses implementing migration rules.
+**Supersedes:** The original ADR-003 which used libcst as the migration engine.
 **Status:** Accepted
 
 ---
@@ -808,6 +937,65 @@ LLM outputs for cryptographic recommendations must not vary across runs.
 `ScanReport` are the canonical inter-module data exchange types.
 **Reason:** Parallel development requires stable interfaces.
 **Impact:** Any schema change to these models requires a PR that all developers review.
+**Status:** Accepted
+
+---
+
+### ADR-006: tree-sitter as primary multi-language parser
+
+**Date:** 2025 (Phase 1 revision)
+**Decision:** `tree-sitter` is the primary AST parser for all language detection in the Analyzer and Detector.
+`libcst` is retained exclusively for Python code transforms in the Migrator (lossless CST roundtrip).
+**Reason:** Architecture is designed for multi-language detection from the start. `tree-sitter` provides a
+single, consistent query API for 40+ languages. `libcst` is Python-only and not needed for detection.
+**Impact:** Analyzer must use `tree-sitter` grammars per language. Migrator retains `libcst` for Python-only
+transforms. The `SourceFile.language` field (set by Ingestion) drives parser selection.
+**Supersedes:** ADR-003 partial scope — ADR-003 still governs Migrator transforms; this ADR governs Analyzer/Detector.
+**Status:** Accepted
+
+---
+
+### ADR-007: LangGraph for agentic orchestration of Planner → Migrator → Validator
+
+**Date:** 2025 (Phase 2 revision)
+**Decision:** Planner, Migrator, and Validator are implemented as LangGraph `StateGraph` nodes.
+The migration loop is a LangGraph graph: `planner_node → migrator_node → validator_node`
+with conditional edges for retry (up to 3 attempts) and escalation to `MANUAL_REQUIRED`.
+**Reason:** A plain function pipeline cannot handle multi-step reasoning, retry with updated hints,
+or per-step state persistence. LangGraph provides typed state flow, conditional routing, and
+Redis checkpointer integration. It is provider-agnostic — it calls `LLMClient` which routes to watsonx.ai.
+**Impact:** `qsma.planner`, `qsma.migrator`, `qsma.validator` each expose a `*_node(state)` function.
+A new `src/qsma/agent/graph.py` wires the graph. `MigrationSessionState` Pydantic model is the shared state.
+**Status:** Accepted
+
+---
+
+### ADR-008: Redis for session state persistence and mid-run resume
+
+**Date:** 2025 (Phase 2 revision)
+**Decision:** `MigrationSessionState` is persisted to Redis using LangGraph's `RedisSaver` checkpointer.
+Each session has a UUID4 key with a 24h TTL. Sessions can be resumed with `qsma migrate --resume <id>`.
+**Reason:** A migration over a large codebase can take minutes and may be interrupted (network, timeout,
+user Ctrl+C). Without persistence, all progress is lost. Redis provides sub-millisecond read/write
+for the session JSON blob, and LangGraph has a first-class Redis checkpointer integration.
+**Impact:** Redis is a new optional runtime dependency. If Redis is unavailable, the tool falls back
+to stateless mode (no resume) with a printed warning. `REDIS_URL` env var configures the connection.
+`src/qsma/utils/session.py` is a new module.
+**Status:** Accepted
+
+---
+
+### ADR-009: Agent training data stored in src/qsma/llm/training_data/
+
+**Date:** 2025 (Phase 2 revision)
+**Decision:** Few-shot migration examples and system prompts for LangGraph agent nodes are stored as
+static JSON/text files in `src/qsma/llm/training_data/`. They are loaded at agent startup, not fetched
+from a live database.
+**Reason:** Hackathon MVP does not require a live training pipeline. Static files are version-controlled,
+diffable, reviewable, and immediately available without infrastructure. The schema is designed to be
+importable into a fine-tuning pipeline in a future phase.
+**Impact:** New directory `src/qsma/llm/training_data/` with `few_shot/` and `prompts/` subdirectories.
+The LLM client's prompt-builder functions load from this directory.
 **Status:** Accepted
 
 ---
