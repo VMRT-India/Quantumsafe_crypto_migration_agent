@@ -60,20 +60,20 @@ git branch --show-current
 
 Expected branches:
 
-| Branch | Owner | Purpose |
+| Branch | Owner | GitHub |
 |---|---|---|
-| `main` | Maruti (repo owner) | Always demo-ready; final submission state |
-| `changes-Maruti` | Maruti | Maruti's active development work |
-| `changes-Samik` | Samik | Samik's active development work |
-| `changes-Navya` | Navya | Navya's active development work |
-| `changes-Palak` | Palak | Palak's active development work |
+| `main` | Maruti (repo owner) | `vmrt-india` |
+| `changes-Maruti` | **Maruti** | `vmrt-india` |
+| `changes-Samik` | **Samik** | — |
+| `changes-Navya` | **Navya** | — |
+| `changes-Palak` | **Palak** | — |
 
-**Personal branches merge into `main` via PR.**
-Maruti reviews and approves all PRs as repo owner.
+**Each developer works only on their own branch and merges to `main` when ready.**
+Maruti (`vmrt-india`) is repo owner and coordinates merges.
 
-`PROJECT_CONTEXT.md §11` contains the current architecture state per branch.
-Before merging into `main`, the architecture state section must be updated
-to reflect what that branch has implemented.
+**Before merging into `main`**, update your row in the
+[`ARCHITECTURE.md` branch state table](ARCHITECTURE.md#per-branch-architecture-state)
+in the same commit to reflect what you implemented.
 
 ---
 
@@ -309,7 +309,10 @@ A changed file invalidates only that file's findings, not the entire scan.
 
 | Question | Where to look |
 |---|---|
-| What is the architecture? | `PROJECT_CONTEXT.md §4` |
+| What files exist and what do they contain? | `ARCHITECTURE.md` — file index |
+| What is the current architecture? | `ARCHITECTURE.md` — pipeline diagram |
+| What is implemented on each branch right now? | `ARCHITECTURE.md` — branch state table |
+| Full module specs, DAG, task allocation? | `PROJECT_CONTEXT.md §4–10` |
 | What does module X do? | `PROJECT_CONTEXT.md §6.X` |
 | What data does module X produce/consume? | `PROJECT_CONTEXT.md §7` + `src/qsma/utils/models.py` |
 | What task to work on? | `PROJECT_CONTEXT.md §17–18` |

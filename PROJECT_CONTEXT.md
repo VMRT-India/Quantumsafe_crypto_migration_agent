@@ -545,25 +545,25 @@ Detailed JSON schemas for each are in `docs/contracts/`.
 
 ### Phase 1 (Foundation + Core Detection)
 
-| Developer | Primary tasks | Notes |
+| Branch | Primary tasks | Notes |
 |---|---|---|
-| **Dev 1** | T-01 (Models), T-02 (Ingestion), T-03 (Analyzer) | Pipeline foundation — sequential |
-| **Dev 2** | T-07 (LLM Client), T-08 (Planner), T-10 (LLM Migration) | IBM watsonx integration |
-| **Dev 3** | T-05 (Pattern library), T-04 (Detector), T-06 (Classifier) | Crypto knowledge workstream |
-| **Dev 4** | T-14 (Test fixtures), T-12 (Reporter), T-11 (Validator) | Test infra + output layer |
+| `changes-Maruti` | T-01 (Models), T-02 (Ingestion), T-03 (Analyzer) | Pipeline foundation — sequential |
+| `changes-Samik` | T-07 (LLM Client), T-08 (Planner), T-10 (LLM Migration) | IBM watsonx integration |
+| `changes-Navya` | T-05 (Pattern library), T-04 (Detector), T-06 (Classifier) | Crypto knowledge workstream |
+| `changes-Palak` | T-14 (Test fixtures), T-12 (Reporter), T-11 (Validator) | Test infra + output layer |
 
 ### Phase 2 (Migration + Integration)
 
-| Developer | Primary tasks |
+| Branch | Primary tasks |
 |---|---|
-| **Dev 1** | T-09 (Deterministic Migrator transforms) |
-| **Dev 2** | T-10 (LLM-assisted migration path) |
-| **Dev 3** | T-16, T-17 (Detector+Classifier unit/integration tests) |
-| **Dev 4** | T-13 (CLI wiring), T-15 (Ingestion+Analyzer tests) |
+| `changes-Maruti` | T-09 (Deterministic Migrator transforms) |
+| `changes-Samik` | T-10 (LLM-assisted migration path) |
+| `changes-Navya` | T-16, T-17 (Detector+Classifier unit/integration tests) |
+| `changes-Palak` | T-13 (CLI wiring), T-15 (Ingestion+Analyzer tests) |
 
 ### Phase 3 (Hardening + Demo)
 
-All devs: T-18 (migration integration tests), T-19 (end-to-end), demo polish, README.
+All branches: T-18 (migration integration tests), T-19 (end-to-end), demo polish, README.
 
 ---
 
@@ -575,25 +575,24 @@ There are exactly **5 long-lived branches**. No additional persistent branches.
 Feature work happens on personal branches; PRs merge back to `main`.
 
 ```
-main                — protected; always demo-ready; final submission state
-  ├─ changes-Maruti   — Maruti's active development (repo owner / PR approver)
-  ├─ changes-Samik    — Samik's active development
-  ├─ changes-Navya    — Navya's active development
-  └─ changes-Palak    — Palak's active development
+main                — always demo-ready; final submission state
+  ├─ changes-Maruti
+  ├─ changes-Samik
+  ├─ changes-Navya
+  └─ changes-Palak
 ```
 
-**Each developer works only on their personal branch.**
+**Each developer works only on their own personal branch.**
 Short-lived `fix/` branches off a personal branch are fine and auto-deleted after merge.
 
 ### Merge flow
 
 ```
-changes-<name>  →  PR (reviewed by Maruti)  →  main
+changes-<name>  →  merge to main  →  push origin main
 ```
 
 - Personal branches are rebased on `main` regularly to stay current.
-- PRs require at least **Maruti's approval** before merging to `main`.
-- `main` receives a merge commit (not squash) so individual author contributions are visible.
+- `main` receives a fast-forward or merge commit so individual author commits are visible.
 
 ### Rules
 
@@ -619,16 +618,9 @@ This table tracks what is **actually implemented** on each branch at any point i
 An AI agent reading this table knows exactly what exists on each branch without
 needing to inspect the code.
 
-| Branch | Modules implemented | Phase | Last updated |
-|---|---|---|---|
-| `main` | Phase 0 stubs: CLI stub, models.py, project structure | Phase 0 | 2024 Phase 0 |
-| `changes-Maruti` | (same as main — branch not yet diverged) | Phase 0 | — |
-| `changes-Samik` | (same as main — branch not yet diverged) | Phase 0 | — |
-| `changes-Navya` | (same as main — branch not yet diverged) | Phase 0 | — |
-| `changes-Palak` | (same as main — branch not yet diverged) | Phase 0 | — |
+> Architecture state is tracked in **`ARCHITECTURE.md`** (branch state table).
+> Update that file in the same commit as your implementation.
 
-> **Rule:** When you implement a module on your branch, update your row in this table
-> in the same commit. Format: `feat(ingestion): ... — updates §11 branch state table`.
 
 ---
 
@@ -904,23 +896,19 @@ The immediate next steps after Phase 0 review:
 1. **Team:** Review and agree on `models.py` — this is the contract all modules depend on.
    If changes are needed, make them NOW before parallel development starts.
 
-2. **Dev 1:** Create `feat/ingestion-analyzer` branch.
-   Implement `qsma.ingestion` (T-02) and `qsma.analyzer` (T-03).
+2. **`changes-Maruti`**: Implement `qsma.ingestion` (T-02) and `qsma.analyzer` (T-03).
    Start with `CodebaseSnapshot` and `IngestionConfig`.
 
-3. **Dev 2:** Create `feat/llm-client-planner` branch.
-   Implement `qsma.llm` client wrapper (T-07).
+3. **`changes-Samik`**: Implement `qsma.llm` client wrapper (T-07).
    Ensure it mocks cleanly in tests — watsonx credentials not required for unit tests.
 
-4. **Dev 3:** Create `feat/detector-classifier` branch.
-   Define the detection rule schema in `qsma.detector.patterns` (T-05).
+4. **`changes-Navya`**: Define the detection rule schema in `qsma.detector.patterns` (T-05).
    Build the risk table in `qsma.classifier` (part of T-06).
 
-5. **Dev 4:** Create `feat/reporter-validator` branch.
-   Implement `qsma.reporter` (T-12) against the existing `CryptoFinding` schema.
+5. **`changes-Palak`**: Implement `qsma.reporter` (T-12) against the existing `CryptoFinding` schema.
    Create sample project fixtures in `tests/fixtures/` (T-14).
 
-**Phase 1 integration checkpoint:** When Dev 1 completes Analyzer, schedule a 30-min
+**Phase 1 integration checkpoint:** When `changes-Maruti` completes Analyzer, schedule a 30-min
 integration session to wire Ingestion → Analyzer → Detector (stub) and verify the
 data contracts hold in practice.
 
