@@ -394,6 +394,7 @@ def planner_node(state: PlannerState) -> PlannerState:
     for wave in waves:
         for fid in wave:
             f = next(x for x in ordered if x.id == fid)
+            plan = finding_plans[fid]
             finding_meta[fid] = FindingMeta(
                 finding_id=fid,
                 order=order_counter,
@@ -403,6 +404,7 @@ def planner_node(state: PlannerState) -> PlannerState:
                 line_start=f.location.line_start,
                 line_end=f.location.line_end,
                 algorithm=f.algorithm.value,
+                target_algorithm=plan.target_algorithm.value,
                 description=f.explanation,
                 depends_on=deps_of.get(fid, []),
             )

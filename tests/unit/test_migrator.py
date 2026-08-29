@@ -79,6 +79,7 @@ def make_plan(
 def make_meta(
     finding: CryptoFinding,
     order: int = 1,
+    target_algorithm: str = "ML-DSA (Dilithium)",
 ) -> FindingMeta:
     return FindingMeta(
         finding_id=finding.id,
@@ -89,6 +90,7 @@ def make_meta(
         line_start=finding.location.line_start,
         line_end=finding.location.line_end,
         algorithm=finding.algorithm.value,
+        target_algorithm=target_algorithm,
         description=finding.explanation,
     )
 

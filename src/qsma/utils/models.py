@@ -282,7 +282,8 @@ class FindingMeta(BaseModel):
     symbol_name: str = ""               # enclosing function/class/block name; "" if unknown
     line_start: int
     line_end: int
-    algorithm: str                      # source algorithm value string
+    algorithm: str                      # existing (source) algorithm — e.g. "RSA"
+    target_algorithm: str               # new (target) algorithm — e.g. "ML-DSA (Dilithium)"
     description: str                    # human-readable summary of what to change
     # finding_ids of OTHER findings whose migrations must complete before this one
     depends_on: list[str] = Field(default_factory=list)
