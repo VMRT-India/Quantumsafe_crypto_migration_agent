@@ -16,7 +16,7 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
-from qsma.utils.models import MigrationSessionState, ScanReport
+from qsma.utils.models import ScanReport
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -145,7 +145,8 @@ def migrate(
     try:
         if resume:
             console.print(f"[bold blue]Resuming[/bold blue] session: {resume}")
-            state = MigrationSessionState(session_id=resume, target_path=path, is_dry_run=dry_run)
+            session_id = resume
+            selected_ids: list[str] = []
         else:
             session_id = str(uuid.uuid4())
             console.print(f"[bold blue]Starting new[/bold blue] migration session: {session_id}")
@@ -153,19 +154,13 @@ def migrate(
             if auto and not selected_ids:
                 console.print("[yellow]--auto selected: mocking CRITICAL/HIGH selection[/yellow]")
                 selected_ids = ["QSMA-0001", "QSMA-0002"]
-            state = MigrationSessionState(
-                session_id=session_id,
-                target_path=path,
-                selected_finding_ids=selected_ids,
-                is_dry_run=dry_run,
-            )
 
         console.print(
-            f"Selected findings: {', '.join(state.selected_finding_ids) if state.selected_finding_ids else 'None'}"
+            f"Selected findings: {', '.join(selected_ids) if selected_ids else 'None'}"
         )
         console.print(f"Dry-run mode: {'[yellow]Yes[/yellow]' if dry_run else '[green]No[/green]'}")
 
-        if not state.selected_finding_ids:
+        if not selected_ids:
             console.print(
                 "[yellow]No findings selected for migration. Use `qsma chat` or `--finding-id`.[/yellow]"
             )
