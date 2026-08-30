@@ -6,8 +6,8 @@ Top-level Click group that wires together all CLI sub-commands.
 
 from __future__ import annotations
 
-import json
 import logging
+import time
 import uuid
 from pathlib import Path
 
@@ -16,12 +16,24 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
-from qsma.utils.models import ScanReport
+from qsma.agent import run_migration_session
+from qsma.analyzer import analyse_snapshot
+from qsma.classifier import classify
+from qsma.detector import detect
+from qsma.ingestion import collect_snapshot
+from qsma.reporter import build_scan_report, finding_rows, format_json, format_markdown
+from qsma.utils.models import IngestionConfig, ScanReport
+from qsma.validator.node import run_syntax_check, run_test_suite
 
 console = Console()
 logger = logging.getLogger(__name__)
 
 CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"]}
+
+# All extensions the Analyzer/Detector have tree-sitter grammars for
+# (walker.py's default IngestionConfig only includes .py — override it here
+# so `qsma scan` picks up every supported language by default).
+_ALL_SUPPORTED_EXTENSIONS = [".py", ".java", ".go", ".c", ".h", ".cc", ".cpp", ".rs"]
 
 
 @click.group(context_settings=CONTEXT_SETTINGS)
@@ -30,6 +42,80 @@ def cli() -> None:
     """Quantum-Safe Crypto Migration Agent."""
     if click.get_current_context().invoked_subcommand is None:
         click.echo(click.get_current_context().get_help())
+
+
+def _run_scan_pipeline(path: Path) -> ScanReport:
+    """Ingestion -> Analyzer -> Detector -> Classifier -> ScanReport."""
+    start = time.monotonic()
+    session_id = str(uuid.uuid4())
+
+    config = IngestionConfig(extensions=_ALL_SUPPORTED_EXTENSIONS)
+    snapshot = collect_snapshot(path, config)
+    analysis = analyse_snapshot(snapshot)
+    hits, graph = detect(analysis, session_id=session_id, root_path=path)
+    findings = classify(hits, graph)
+
+    duration = time.monotonic() - start
+    return build_scan_report(path, snapshot, findings, duration, dependency_graph=graph)
+
+
+def _render_report(report: ScanReport, fmt: str, output: Path | None) -> None:
+    if fmt == "json":
+        output_data = format_json(report)
+        if output:
+            output.write_text(output_data)
+            console.print(f"[green]✓[/green] Report written to {output}")
+        else:
+            console.print_json(output_data)
+    elif fmt == "markdown":
+        md_content = format_markdown(report)
+        if output:
+            output.write_text(md_content)
+            console.print(f"[green]✓[/green] Report written to {output}")
+        else:
+            console.print(md_content)
+    else:
+        table = Table(title="Scan Summary")
+        table.add_column("ID", style="cyan")
+        table.add_column("Risk")
+        table.add_column("Algorithm")
+        table.add_column("Severity", justify="right")
+        table.add_column("Location")
+        table.add_column("Recommendation")
+
+        risk_style = {
+            "CRITICAL": "bold red",
+            "HIGH": "yellow",
+            "MEDIUM": "cyan",
+            "LOW": "green",
+            "INFO": "dim",
+        }
+        for row in finding_rows(report):
+            style = risk_style.get(row["risk"], "white")
+            table.add_row(
+                row["id"],
+                f"[{style}]{row['risk']}[/{style}]",
+                row["algorithm"],
+                row["severity"],
+                row["file"],
+                row["recommendation"],
+            )
+
+        console.print(
+            f"Target: {report.target_path}  |  Files scanned: {report.total_files_scanned}  |  "
+            f"Duration: {report.scan_duration_seconds:.2f}s"
+        )
+        console.print(
+            f"Total findings: {report.total_findings}  "
+            f"([bold red]Critical: {report.critical_count}[/bold red] "
+            f"[yellow]High: {report.high_count}[/yellow] "
+            f"[cyan]Medium: {report.medium_count}[/cyan] "
+            f"[green]Low: {report.low_count}[/green])"
+        )
+        console.print(table)
+        if output:
+            output.write_text(format_json(report))
+            console.print(f"[green]✓[/green] Full JSON report written to {output}")
 
 
 @cli.command()
@@ -50,48 +136,10 @@ def scan(path: Path, fmt: str, output: Path | None) -> None:
             task = progress.add_task(
                 "Running Ingestion → Analyzer → Detector → Classifier...", total=None
             )
-            import time
-
-            time.sleep(1.5)
-            report = ScanReport(
-                target_path=path,
-                total_files_scanned=42,
-                total_findings=3,
-                critical_count=1,
-                high_count=2,
-                medium_count=0,
-                low_count=0,
-                scan_duration_seconds=1.5,
-            )
+            report = _run_scan_pipeline(path)
             progress.update(task, description="Scan complete.")
 
-        if fmt == "json":
-            output_data = report.model_dump_json(indent=2)
-            if output:
-                output.write_text(output_data)
-                console.print(f"[green]✓[/green] Report written to {output}")
-            else:
-                console.print_json(output_data)
-        elif fmt == "markdown":
-            md_content = f"# QSMA Scan Report\n\n- **Target**: {path}\n- **Files Scanned**: {report.total_files_scanned}\n- **Total Findings**: {report.total_findings}\n"
-            if output:
-                output.write_text(md_content)
-                console.print(f"[green]✓[/green] Report written to {output}")
-            else:
-                console.print(md_content)
-        else:
-            table = Table(title="Scan Summary")
-            table.add_column("Metric", style="cyan")
-            table.add_column("Value", style="green")
-            table.add_row("Target Path", str(path))
-            table.add_row("Files Scanned", str(report.total_files_scanned))
-            table.add_row("Total Findings", str(report.total_findings))
-            table.add_row("Critical", f"[red]{report.critical_count}[/red]")
-            table.add_row("High", f"[yellow]{report.high_count}[/yellow]")
-            console.print(table)
-            if output:
-                output.write_text(report.model_dump_json(indent=2))
-                console.print(f"[green]✓[/green] Full JSON report written to {output}")
+        _render_report(report, fmt, output)
 
     except KeyboardInterrupt:
         console.print("\n[yellow]Scan interrupted by user.[/yellow]")
@@ -109,19 +157,19 @@ def scan(path: Path, fmt: str, output: Path | None) -> None:
     type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
 )
 @click.option("--findings", type=click.Path(exists=True, path_type=Path), default=None)
-def report(path: Path, findings: Path | None) -> None:
+@click.option("--format", "fmt", type=click.Choice(["text", "json", "markdown"]), default="text")
+def report(path: Path, findings: Path | None, fmt: str) -> None:
     """Display a formatted findings report for a previously scanned codebase."""
     console.print(f"[bold cyan]qsma report[/bold cyan] — target: {path}")
     try:
         if findings:
             console.print(f"Loading findings from {findings}...")
-            json.loads(findings.read_text())
+            scan_report = ScanReport.model_validate_json(findings.read_text())
         else:
             console.print("[yellow]No --findings file provided. Running fresh scan...[/yellow]")
-            raise NotImplementedError("Fresh scan orchestration not yet wired in CLI")
-        console.print(
-            "[yellow]Reporter module integration pending. See PROJECT_CONTEXT.md §6.8[/yellow]"
-        )
+            scan_report = _run_scan_pipeline(path)
+
+        _render_report(scan_report, fmt, None)
     except Exception as e:
         console.print(f"[red]✗[/red] Report generation failed: {e}")
         raise click.Abort() from e
@@ -146,21 +194,30 @@ def migrate(
         if resume:
             console.print(f"[bold blue]Resuming[/bold blue] session: {resume}")
             session_id = resume
-            selected_ids: list[str] = []
         else:
             session_id = str(uuid.uuid4())
             console.print(f"[bold blue]Starting new[/bold blue] migration session: {session_id}")
-            selected_ids = list(finding_id)
-            if auto and not selected_ids:
-                console.print("[yellow]--auto selected: mocking CRITICAL/HIGH selection[/yellow]")
-                selected_ids = ["QSMA-0001", "QSMA-0002"]
 
-        console.print(f"Selected findings: {', '.join(selected_ids) if selected_ids else 'None'}")
+        console.print("Running scan to resolve findings...")
+        scan_report = _run_scan_pipeline(path)
+        all_findings = {f.id: f for f in scan_report.findings}
+
+        if finding_id:
+            selected = [all_findings[fid] for fid in finding_id if fid in all_findings]
+        elif auto:
+            selected = [f for f in scan_report.findings if f.risk.value in ("CRITICAL", "HIGH")]
+        else:
+            selected = []
+
+        console.print(
+            f"Selected findings: {', '.join(f.id for f in selected) if selected else 'None'}"
+        )
         console.print(f"Dry-run mode: {'[yellow]Yes[/yellow]' if dry_run else '[green]No[/green]'}")
 
-        if not selected_ids:
+        if not selected:
             console.print(
-                "[yellow]No findings selected for migration. Use `qsma chat` or `--finding-id`.[/yellow]"
+                "[yellow]No findings selected for migration. "
+                "Use `qsma chat`, `--finding-id`, or `--auto`.[/yellow]"
             )
             return
 
@@ -169,13 +226,14 @@ def migrate(
             SpinnerColumn(), TextColumn("[progress.description]{task.description}")
         ) as progress:
             task = progress.add_task("Running agentic migration loop...", total=None)
-            import time
-
-            time.sleep(2.0)
+            final_state = run_migration_session(session_id, path, selected, dry_run=dry_run)
             progress.update(task, description="Migration loop complete.")
 
+        passed = sum(1 for v in final_state.validation_results if v.passed)
+        failed = len(final_state.validation_results) - passed
         console.print(
-            "[green]✓[/green] Migration session finished. Run `qsma validate` or `qsma report`."
+            f"[green]✓[/green] Migration session {session_id} finished. "
+            f"{passed} passed, {failed} failed. Run `qsma validate` or `qsma report`."
         )
     except KeyboardInterrupt:
         console.print(
@@ -196,20 +254,35 @@ def migrate(
 )
 @click.option("--timeout", default=120, show_default=True, help="Validation timeout (seconds).")
 def validate(path: Path, timeout: int) -> None:
-    """Run post-migration validation (build + tests) on a codebase."""
+    """Run post-migration validation (syntax + tests) on a codebase."""
     console.print(f"[bold cyan]qsma validate[/bold cyan] — target: {path}")
     try:
+        py_files = list(path.rglob("*.py"))
         with Progress(
             SpinnerColumn(), TextColumn("[progress.description]{task.description}")
         ) as progress:
             task = progress.add_task(
                 f"Running syntax checks and test suites (timeout: {timeout}s)...", total=None
             )
-            import time
-
-            time.sleep(1.5)
+            syntax_ok, syntax_error = run_syntax_check(py_files)
+            tests_ok, test_summary, error_output = (True, "Skipped (syntax failed)", "")
+            if syntax_ok:
+                tests_ok, test_summary, error_output = run_test_suite(path, timeout=timeout)
             progress.update(task, description="Validation complete.")
-        console.print("[green]✓[/green] All modified files pass syntax checks. Test suite passed.")
+
+        if syntax_ok and tests_ok:
+            console.print(f"[green]✓[/green] All modified files pass syntax checks. {test_summary}.")
+        else:
+            console.print("[red]✗[/red] Validation failed.")
+            if not syntax_ok:
+                console.print(f"  Syntax error: {syntax_error}")
+            if not tests_ok:
+                console.print(f"  {test_summary}")
+                if error_output:
+                    console.print(error_output)
+            raise click.Abort()
+    except click.Abort:
+        raise
     except Exception as e:
         console.print(f"[red]✗[/red] Validation failed: {e}")
         logger.exception("Validation error")

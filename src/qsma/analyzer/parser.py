@@ -248,6 +248,14 @@ _GENERIC_QUERIES: dict[str, dict[str, str]] = {
         "functions": "(method_declaration name: (identifier) @func_name)",
         "classes": "(class_declaration name: (identifier) @class_name)",
         "calls": "(method_invocation name: (identifier) @func)",
+        # Java's JCA factory pattern selects the algorithm via a string argument
+        # (Cipher.getInstance("AES/CBC/PKCS5Padding"), KeyPairGenerator.getInstance("RSA"),
+        # MessageDigest.getInstance("SHA-256")) — the method name alone ("getInstance")
+        # doesn't reveal the algorithm, so this captures receiver + method + arg together.
+        "factory_calls": (
+            "(method_invocation object: (identifier) @recv name: (identifier) @method "
+            "arguments: (argument_list (string_literal) @arg))"
+        ),
     },
     "go": {
         "imports": "(import_spec path: (interpreted_string_literal) @module)",
@@ -255,6 +263,13 @@ _GENERIC_QUERIES: dict[str, dict[str, str]] = {
         "classes": "(type_declaration (type_spec name: (type_identifier) @class_name))",
         "calls_plain": "(call_expression function: (identifier) @func)",
         "calls_sel": "(call_expression function: (selector_expression field: (field_identifier) @func))",
+        # Same call sites as calls_sel, but with the package qualifier too —
+        # Go crypto packages reuse generic names (e.g. both aes.NewCipher and
+        # des.NewCipher), so the bare field name alone can't disambiguate.
+        "calls_sel_qualified": (
+            "(call_expression function: (selector_expression "
+            "operand: (identifier) @recv field: (field_identifier) @func))"
+        ),
     },
     "c": {
         "imports": "(preproc_include path: [(system_lib_string) @module (string_literal) @module])",
@@ -268,6 +283,12 @@ _GENERIC_QUERIES: dict[str, dict[str, str]] = {
         "classes": "(struct_item name: (type_identifier) @class_name)",
         "calls_plain": "(call_expression function: (identifier) @func)",
         "calls_scoped": "(call_expression function: (scoped_identifier name: (identifier) @func))",
+        # Same call sites as calls_scoped, with the leading path segment too
+        # (e.g. RsaPrivateKey::new, Aes256::new, Sha256::new).
+        "calls_scoped_qualified": (
+            "(call_expression function: (scoped_identifier "
+            "path: (_) @recv name: (identifier) @func))"
+        ),
     },
 }
 
@@ -332,6 +353,51 @@ def _extract_generic(source: str, path: Path, language: str) -> ParsedFile:
                             language=language,
                         )
                     )
+
+    # Qualified call sites: Go (package.Func) / Rust (Type::func) — the plain
+    # "calls_sel"/"calls_scoped" queries above only capture the bare function
+    # name, which collides across packages/types (e.g. aes.NewCipher vs
+    # des.NewCipher both surface as "NewCipher"). These populate qualified_name
+    # so detector rules can disambiguate by receiver.
+    for qkey in ("calls_sel_qualified", "calls_scoped_qualified"):
+        qual_q = lang_queries.get(qkey)
+        if qual_q:
+            for _, caps in _run_query(lang, qual_q, root):
+                for func_node, recv_node in zip(
+                    _nodes(caps, "func"), _nodes(caps, "recv"), strict=False
+                ):
+                    call_sites.append(
+                        CallSite(
+                            function_name=_text(func_node),
+                            qualified_name=f"{_text(recv_node)}.{_text(func_node)}",
+                            line=func_node.start_point[0] + 1,
+                            language=language,
+                        )
+                    )
+
+    # Java JCA factory calls: Cipher/KeyPairGenerator/MessageDigest/Signature
+    # .getInstance("ALGO") — captured separately so the algorithm string
+    # argument survives onto CallSite (the plain "calls" query above only
+    # sees the generic method name "getInstance").
+    factory_q = lang_queries.get("factory_calls")
+    if factory_q:
+        for _, caps in _run_query(lang, factory_q, root):
+            method_nodes = _nodes(caps, "method")
+            recv_nodes = _nodes(caps, "recv")
+            arg_nodes = _nodes(caps, "arg")
+            if method_nodes and recv_nodes and arg_nodes:
+                method = _text(method_nodes[0])
+                recv = _text(recv_nodes[0])
+                arg = _text(arg_nodes[0]).strip("\"'")
+                call_sites.append(
+                    CallSite(
+                        function_name=method,
+                        qualified_name=f"{recv}.{method}",
+                        arguments=[arg],
+                        line=method_nodes[0].start_point[0] + 1,
+                        language=language,
+                    )
+                )
 
     intra_file_calls: dict[str, list[str]] = {}
     for cs in call_sites:

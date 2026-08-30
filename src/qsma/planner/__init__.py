@@ -64,6 +64,8 @@ _NIST_TARGETS: dict[str, str] = {
     "AES-128": "AES-256             — NIST SP 800-131A",
     "DES": "AES-256             — NIST SP 800-131A",
     "3DES": "AES-256             — NIST SP 800-131A",
+    "MD5": "SHA-256              — FIPS 180-4",
+    "SHA-1": "SHA-256              — FIPS 180-4",
 }
 
 
@@ -100,7 +102,8 @@ def _load_few_shot(algorithm: str) -> list[dict[str, Any]]:
         return []
     try:
         data = json.loads(few_shot_path.read_text(encoding="utf-8"))
-        return data.get("examples", [])
+        examples: list[dict[str, Any]] = data.get("examples", [])
+        return examples
     except Exception:
         return []
 
@@ -320,6 +323,15 @@ def _build_plan_for_finding(
     hints: dict[str, Any] = data.get("transformation_hints", {})
     # Always inject source_algorithm — migrator depends on this key for few-shot lookup
     hints["source_algorithm"] = algorithm_str
+    # Always inject the real original snippet — migrator_node falls back to
+    # meta.description (a generic explanation sentence) when this key is
+    # absent, which means it would try to "transform" prose instead of code.
+    # Use the raw (unstripped) snippet here — `snippet` above is .strip()'d
+    # for display in this function's own LLM prompt, but the Migrator's
+    # patcher splices this value back into the exact original line range, so
+    # losing the leading indentation would break the file.
+    if finding.location.snippet:
+        hints["original_snippet"] = finding.location.snippet
 
     return MigrationPlan(
         finding_id=finding.id,

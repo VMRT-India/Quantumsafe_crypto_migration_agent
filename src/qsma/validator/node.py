@@ -71,7 +71,7 @@ def generate_retry_hints(llm_client: LLMClient, error_output: str, original_snip
     Do NOT write the full code, just the hints.
     """
     try:
-        response = llm_client.generate(prompt, max_tokens=300)
+        response = llm_client.chat([{"role": "user", "content": prompt}], max_tokens=300)
         return response.strip()
     except Exception as e:
         logger.error(f"LLM retry hint generation failed: {e}")

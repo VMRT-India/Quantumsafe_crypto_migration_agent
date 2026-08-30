@@ -164,6 +164,134 @@ def _match_ecc_keygen(pf: ParsedFile) -> list[CryptoHit]:
     return hits
 
 
+# ---------------------------------------------------------------------------
+# Rule: ECDSA/ECDH/DSA/DH usage in Java / Go / C / Rust
+# ---------------------------------------------------------------------------
+
+_JAVA_EC_RECEIVERS = {"KeyPairGenerator", "KeyAgreement"}
+_GO_ECC_QUALIFIED = {
+    "ecdsa.GenerateKey": ("ECDSA", "key_generation"),
+    "ecdsa.Sign": ("ECDSA", "signature"),
+    "ecdsa.Verify": ("ECDSA", "signature"),
+    "ecdh.X25519": ("ECDH", "key_exchange"),
+    "dsa.GenerateKey": ("DSA", "key_generation"),
+}
+_C_ECC_FUNCS = {
+    "EC_KEY_new": ("ECDSA", "key_generation"),
+    "EC_KEY_generate_key": ("ECDSA", "key_generation"),
+    "ECDSA_sign": ("ECDSA", "signature"),
+    "ECDSA_verify": ("ECDSA", "signature"),
+    "DH_generate_key": ("DH", "key_generation"),
+}
+_RUST_ECC_RECEIVERS = {"p256", "k256", "P256", "K256"}
+
+
+def _match_ecc_multilang(pf: ParsedFile) -> list[CryptoHit]:
+    hits: list[CryptoHit] = []
+
+    if pf.language == "java":
+        for cs in pf.call_sites:
+            recv = (cs.qualified_name or "").split(".")[0]
+            if (
+                cs.function_name == "getInstance"
+                and recv in _JAVA_EC_RECEIVERS
+                and cs.arguments
+                and cs.arguments[0].upper() in ("EC", "ECDH", "ECDSA")
+            ):
+                usage_type = "key_exchange" if recv == "KeyAgreement" else "key_generation"
+                algo = "ECDH" if recv == "KeyAgreement" else "ECDSA"
+                hits.append(
+                    CryptoHit(
+                        rule_id=f"ecc-java-{usage_type}",
+                        algorithm_hint=algo,
+                        usage_type=usage_type,
+                        location=_make_location(pf, cs.line),
+                        raw_node_info={"qualified_name": cs.qualified_name, "arg": cs.arguments[0]},
+                    )
+                )
+
+    elif pf.language == "go":
+        for imp in pf.imports:
+            if imp.qualified_name in ("crypto/ecdsa", "crypto/dsa", "crypto/elliptic"):
+                algo = "DSA" if "dsa" in imp.qualified_name else "ECDSA"
+                hits.append(
+                    CryptoHit(
+                        rule_id=f"ecc-import-{algo.lower()}",
+                        algorithm_hint=algo,
+                        usage_type="import",
+                        location=_make_location(pf, imp.line),
+                        raw_node_info={"module": imp.module},
+                    )
+                )
+        for cs in pf.call_sites:
+            match = _GO_ECC_QUALIFIED.get(cs.qualified_name or "")
+            if match:
+                algo, usage_type = match
+                hits.append(
+                    CryptoHit(
+                        rule_id=f"ecc-go-{usage_type}",
+                        algorithm_hint=algo,
+                        usage_type=usage_type,
+                        location=_make_location(pf, cs.line),
+                        raw_node_info={"qualified_name": cs.qualified_name},
+                    )
+                )
+
+    elif pf.language == "c":
+        for imp in pf.imports:
+            if any(k in imp.qualified_name.lower() for k in ("ec.h", "dh.h")):
+                algo = "DH" if "dh" in imp.qualified_name.lower() else "ECDSA"
+                hits.append(
+                    CryptoHit(
+                        rule_id=f"ecc-import-{algo.lower()}",
+                        algorithm_hint=algo,
+                        usage_type="import",
+                        location=_make_location(pf, imp.line),
+                        raw_node_info={"module": imp.module},
+                    )
+                )
+        for cs in pf.call_sites:
+            match = _C_ECC_FUNCS.get(cs.function_name)
+            if match:
+                algo, usage_type = match
+                hits.append(
+                    CryptoHit(
+                        rule_id=f"ecc-c-{usage_type}",
+                        algorithm_hint=algo,
+                        usage_type=usage_type,
+                        location=_make_location(pf, cs.line),
+                        raw_node_info={"function": cs.function_name},
+                    )
+                )
+
+    elif pf.language == "rust":
+        for imp in pf.imports:
+            if any(k in imp.qualified_name for k in _RUST_ECC_RECEIVERS):
+                hits.append(
+                    CryptoHit(
+                        rule_id="ecc-import-ecdsa",
+                        algorithm_hint="ECDSA",
+                        usage_type="import",
+                        location=_make_location(pf, imp.line),
+                        raw_node_info={"module": imp.module},
+                    )
+                )
+        for cs in pf.call_sites:
+            recv = (cs.qualified_name or "").split(".")[0]
+            if cs.function_name in ("new", "random") and recv in _RUST_ECC_RECEIVERS:
+                hits.append(
+                    CryptoHit(
+                        rule_id="ecc-rust-key-generation",
+                        algorithm_hint="ECDSA",
+                        usage_type="key_generation",
+                        location=_make_location(pf, cs.line),
+                        raw_node_info={"qualified_name": cs.qualified_name},
+                    )
+                )
+
+    return hits
+
+
 ECC_RULES: list[DetectionRule] = [
     DetectionRule(
         rule_id="ecc-import-ecdsa",
@@ -194,5 +322,11 @@ ECC_RULES: list[DetectionRule] = [
         algorithm_hint="ECDSA",
         usage_type="key_generation",
         matcher_fn=_match_ecc_keygen,
+    ),
+    DetectionRule(
+        rule_id="ecc-multilang",
+        algorithm_hint="ECDSA",
+        usage_type="key_generation",
+        matcher_fn=_match_ecc_multilang,
     ),
 ]

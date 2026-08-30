@@ -2,5 +2,16 @@
   "algorithm": "AES-128",
   "target_algorithm": "AES-256",
   "nist_standard": "NIST SP 800-131A Rev 2",
-  "examples": []
+  "examples": [
+    {
+      "input": "key = os.urandom(16)\ncipher = Cipher(algorithms.AES(key), modes.CBC(iv))",
+      "output": "key = os.urandom(32)\ncipher = Cipher(algorithms.AES(key), modes.CBC(iv))",
+      "note": "AES-256 is a drop-in replacement for AES-128 in the same library — only the key size changes (16 bytes -> 32 bytes). No new library or API shape is needed, unlike the asymmetric algorithm migrations."
+    },
+    {
+      "input": "cipher = AES.new(key, AES.MODE_ECB)",
+      "output": "cipher = AES.new(key, AES.MODE_GCM)",
+      "note": "While migrating the key size, also flag ECB mode as insecure regardless of key size (it leaks structural patterns in the plaintext) — GCM provides both confidentiality and integrity and is the modern default."
+    }
+  ]
 }

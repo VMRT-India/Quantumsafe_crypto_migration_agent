@@ -130,6 +130,99 @@ def _match_hashlib_new_md5(pf: ParsedFile) -> list[CryptoHit]:
     return hits
 
 
+# ---------------------------------------------------------------------------
+# Rule: MD5 / SHA-1 / SHA-256 usage in Java / Go / C / Rust
+# ---------------------------------------------------------------------------
+
+_JAVA_DIGEST_RECEIVERS = {"MessageDigest"}
+_GO_HASH_QUALIFIED = {
+    "md5.Sum": "MD5",
+    "md5.New": "MD5",
+    "sha1.Sum": "SHA-1",
+    "sha1.New": "SHA-1",
+    "sha256.Sum256": "SHA-256",
+    "sha256.New": "SHA-256",
+}
+_C_HASH_FUNCS = {
+    "MD5_Init": "MD5",
+    "MD5": "MD5",
+    "SHA1_Init": "SHA-1",
+    "SHA1": "SHA-1",
+    "SHA256_Init": "SHA-256",
+    "SHA256": "SHA-256",
+    "EVP_sha256": "SHA-256",
+    "EVP_md5": "MD5",
+    "EVP_sha1": "SHA-1",
+}
+_RUST_HASH_RECEIVERS = {"Md5": "MD5", "Sha1": "SHA-1", "Sha256": "SHA-256"}
+
+
+def _match_hashing_multilang(pf: ParsedFile) -> list[CryptoHit]:
+    hits: list[CryptoHit] = []
+
+    if pf.language == "java":
+        for cs in pf.call_sites:
+            recv = (cs.qualified_name or "").split(".")[0]
+            if cs.function_name == "getInstance" and recv in _JAVA_DIGEST_RECEIVERS and cs.arguments:
+                arg = cs.arguments[0].upper().replace("-", "")
+                algo = {"MD5": "MD5", "SHA1": "SHA-1", "SHA256": "SHA-256"}.get(arg)
+                if algo:
+                    hits.append(
+                        CryptoHit(
+                            rule_id=f"{algo.lower().replace('-', '')}-java-hash-usage",
+                            algorithm_hint=algo,
+                            usage_type="hashing",
+                            location=_make_location(pf, cs.line),
+                            raw_node_info={"qualified_name": cs.qualified_name, "arg": cs.arguments[0]},
+                        )
+                    )
+
+    elif pf.language == "go":
+        for cs in pf.call_sites:
+            algo = _GO_HASH_QUALIFIED.get(cs.qualified_name or "")
+            if algo:
+                hits.append(
+                    CryptoHit(
+                        rule_id=f"{algo.lower().replace('-', '')}-go-hash-usage",
+                        algorithm_hint=algo,
+                        usage_type="hashing",
+                        location=_make_location(pf, cs.line),
+                        raw_node_info={"qualified_name": cs.qualified_name},
+                    )
+                )
+
+    elif pf.language == "c":
+        for cs in pf.call_sites:
+            algo = _C_HASH_FUNCS.get(cs.function_name)
+            if algo:
+                hits.append(
+                    CryptoHit(
+                        rule_id=f"{algo.lower().replace('-', '')}-c-hash-usage",
+                        algorithm_hint=algo,
+                        usage_type="hashing",
+                        location=_make_location(pf, cs.line),
+                        raw_node_info={"function": cs.function_name},
+                    )
+                )
+
+    elif pf.language == "rust":
+        for cs in pf.call_sites:
+            recv = (cs.qualified_name or "").split(".")[0]
+            algo = _RUST_HASH_RECEIVERS.get(recv)
+            if algo and cs.function_name == "new":
+                hits.append(
+                    CryptoHit(
+                        rule_id=f"{algo.lower().replace('-', '')}-rust-hash-usage",
+                        algorithm_hint=algo,
+                        usage_type="hashing",
+                        location=_make_location(pf, cs.line),
+                        raw_node_info={"qualified_name": cs.qualified_name},
+                    )
+                )
+
+    return hits
+
+
 HASHING_RULES: list[DetectionRule] = [
     DetectionRule(
         rule_id="md5-import",
@@ -160,5 +253,11 @@ HASHING_RULES: list[DetectionRule] = [
         algorithm_hint="MD5",
         usage_type="hashing",
         matcher_fn=_match_hashlib_new_md5,
+    ),
+    DetectionRule(
+        rule_id="hashing-multilang",
+        algorithm_hint="MD5",
+        usage_type="hashing",
+        matcher_fn=_match_hashing_multilang,
     ),
 ]

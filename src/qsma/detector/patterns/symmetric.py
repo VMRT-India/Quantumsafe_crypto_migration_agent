@@ -147,6 +147,184 @@ def _match_aes128_usage(pf: ParsedFile) -> list[CryptoHit]:
     return hits
 
 
+# ---------------------------------------------------------------------------
+# Rule: DES / AES usage in Java / Go / C / Rust
+# ---------------------------------------------------------------------------
+
+_JAVA_CIPHER_RECEIVERS = {"Cipher", "KeyGenerator"}
+_GO_DES_QUALIFIED = {"des.NewCipher": "encryption", "des.NewTripleDESCipher": "encryption"}
+_GO_AES_QUALIFIED = {"aes.NewCipher": "encryption"}
+_C_DES_FUNCS = {"DES_set_key": "encryption", "DES_ecb_encrypt": "encryption"}
+_C_AES_FUNCS = {
+    "AES_set_encrypt_key": "encryption",
+    "AES_set_decrypt_key": "encryption",
+    "AES_encrypt": "encryption",
+    "EVP_aes_128_cbc": "encryption",
+    "EVP_aes_256_cbc": "encryption",
+}
+_RUST_AES_RECEIVERS = {"Aes128", "Aes256"}
+_RUST_DES_RECEIVERS = {"Des"}
+
+
+def _match_symmetric_multilang(pf: ParsedFile) -> list[CryptoHit]:
+    hits: list[CryptoHit] = []
+
+    if pf.language == "java":
+        for cs in pf.call_sites:
+            recv = (cs.qualified_name or "").split(".")[0]
+            if cs.function_name == "getInstance" and recv in _JAVA_CIPHER_RECEIVERS and cs.arguments:
+                arg = cs.arguments[0].upper()
+                if "AES" in arg:
+                    hits.append(
+                        CryptoHit(
+                            rule_id="aes-java-encryption",
+                            algorithm_hint="AES-128",
+                            usage_type="encryption",
+                            location=_make_location(pf, cs.line),
+                            raw_node_info={"qualified_name": cs.qualified_name, "arg": arg},
+                        )
+                    )
+                elif "DES" in arg:
+                    algo = "3DES" if "3" in arg or "TRIPLE" in arg or "DESEDE" in arg else "DES"
+                    hits.append(
+                        CryptoHit(
+                            rule_id=f"{algo.lower()}-java-encryption",
+                            algorithm_hint=algo,
+                            usage_type="encryption",
+                            location=_make_location(pf, cs.line),
+                            raw_node_info={"qualified_name": cs.qualified_name, "arg": arg},
+                        )
+                    )
+
+    elif pf.language == "go":
+        for imp in pf.imports:
+            if imp.qualified_name == "crypto/aes":
+                hits.append(
+                    CryptoHit(
+                        rule_id="aes-import",
+                        algorithm_hint="AES-128",
+                        usage_type="import",
+                        location=_make_location(pf, imp.line),
+                        raw_node_info={"module": imp.module},
+                    )
+                )
+            elif imp.qualified_name == "crypto/des":
+                hits.append(
+                    CryptoHit(
+                        rule_id="des-import",
+                        algorithm_hint="DES",
+                        usage_type="import",
+                        location=_make_location(pf, imp.line),
+                        raw_node_info={"module": imp.module},
+                    )
+                )
+        for cs in pf.call_sites:
+            qn = cs.qualified_name or ""
+            if qn in _GO_AES_QUALIFIED:
+                hits.append(
+                    CryptoHit(
+                        rule_id="aes128-cipher-usage",
+                        algorithm_hint="AES-128",
+                        usage_type="encryption",
+                        location=_make_location(pf, cs.line),
+                        raw_node_info={"qualified_name": qn},
+                    )
+                )
+            elif qn in _GO_DES_QUALIFIED:
+                algo = "3DES" if "Triple" in qn else "DES"
+                hits.append(
+                    CryptoHit(
+                        rule_id="des-cipher-usage",
+                        algorithm_hint=algo,
+                        usage_type="encryption",
+                        location=_make_location(pf, cs.line),
+                        raw_node_info={"qualified_name": qn},
+                    )
+                )
+
+    elif pf.language == "c":
+        for imp in pf.imports:
+            if "aes.h" in imp.qualified_name.lower():
+                hits.append(
+                    CryptoHit(
+                        rule_id="aes-import",
+                        algorithm_hint="AES-128",
+                        usage_type="import",
+                        location=_make_location(pf, imp.line),
+                        raw_node_info={"module": imp.module},
+                    )
+                )
+            elif "des.h" in imp.qualified_name.lower():
+                hits.append(
+                    CryptoHit(
+                        rule_id="des-import",
+                        algorithm_hint="DES",
+                        usage_type="import",
+                        location=_make_location(pf, imp.line),
+                        raw_node_info={"module": imp.module},
+                    )
+                )
+        for cs in pf.call_sites:
+            if cs.function_name in _C_AES_FUNCS:
+                hits.append(
+                    CryptoHit(
+                        rule_id="aes128-cipher-usage",
+                        algorithm_hint="AES-128",
+                        usage_type="encryption",
+                        location=_make_location(pf, cs.line),
+                        raw_node_info={"function": cs.function_name},
+                    )
+                )
+            elif cs.function_name in _C_DES_FUNCS:
+                hits.append(
+                    CryptoHit(
+                        rule_id="des-cipher-usage",
+                        algorithm_hint="DES",
+                        usage_type="encryption",
+                        location=_make_location(pf, cs.line),
+                        raw_node_info={"function": cs.function_name},
+                    )
+                )
+
+    elif pf.language == "rust":
+        for imp in pf.imports:
+            if "aes" in imp.qualified_name.lower():
+                hits.append(
+                    CryptoHit(
+                        rule_id="aes-import",
+                        algorithm_hint="AES-128",
+                        usage_type="import",
+                        location=_make_location(pf, imp.line),
+                        raw_node_info={"module": imp.module},
+                    )
+                )
+        for cs in pf.call_sites:
+            recv = (cs.qualified_name or "").split(".")[0]
+            if cs.function_name in ("new", "new_from_slice") and recv in _RUST_AES_RECEIVERS:
+                algo = "AES-256" if recv == "Aes256" else "AES-128"
+                hits.append(
+                    CryptoHit(
+                        rule_id="aes128-cipher-usage",
+                        algorithm_hint=algo,
+                        usage_type="encryption",
+                        location=_make_location(pf, cs.line),
+                        raw_node_info={"qualified_name": cs.qualified_name},
+                    )
+                )
+            elif cs.function_name == "new" and recv in _RUST_DES_RECEIVERS:
+                hits.append(
+                    CryptoHit(
+                        rule_id="des-cipher-usage",
+                        algorithm_hint="DES",
+                        usage_type="encryption",
+                        location=_make_location(pf, cs.line),
+                        raw_node_info={"qualified_name": cs.qualified_name},
+                    )
+                )
+
+    return hits
+
+
 SYMMETRIC_RULES: list[DetectionRule] = [
     DetectionRule(
         rule_id="des-import",
@@ -171,5 +349,11 @@ SYMMETRIC_RULES: list[DetectionRule] = [
         algorithm_hint="AES-128",
         usage_type="encryption",
         matcher_fn=_match_aes128_usage,
+    ),
+    DetectionRule(
+        rule_id="symmetric-multilang",
+        algorithm_hint="AES-128",
+        usage_type="encryption",
+        matcher_fn=_match_symmetric_multilang,
     ),
 ]

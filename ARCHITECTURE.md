@@ -18,10 +18,33 @@
 
 ## Current state on `main`
 
-**Phase:** 0 — Foundation complete
-**Last updated:** 2025-08-29
-**What is implemented:** Repo skeleton, shared contracts, stub CLI, LLM client, test fixtures.
-**What is NOT yet implemented:** All pipeline module logic (ingestion through reporter are empty stubs).
+**Phase:** 2 — Migration pipeline working end-to-end
+**Last updated:** 2026-08-30
+**What is implemented:** The full pipeline is real and wired end-to-end:
+Ingestion → Analyzer → Detector → Classifier → CLI, and the LangGraph
+`agent/graph.py` orchestrating Planner → Migrator → Validator with retry/
+escalation. Verified against real open-source codebases (PyJWT, python-jose)
+with a real LLM (not mock) — see `bob_sessions/` and the demo steps in
+`README.md`. Multilingual detection covers Python, Java, Go, C, and Rust.
+**What is NOT yet implemented:** the Advisor module (`qsma chat` is a
+placeholder — natural-language finding selection is out of scope for this
+submission; use `--finding-id`/`--auto` instead, see "Selecting findings to
+migrate" below), and Redis-backed session persistence (an in-memory session
+store is used instead — same function signatures, same `--resume` UX within
+a single process; swapping in real Redis is a drop-in change).
+
+### Selecting findings to migrate
+
+`qsma scan` (via the Classifier) produces `list[CryptoFinding]`, each with a
+stable `id` (e.g. `QSMA-0009`). `qsma migrate` selects which of those to act
+on via:
+- `--finding-id ID [--finding-id ID ...]` — migrate specific findings only
+- `--auto` — auto-select every `CRITICAL`/`HIGH` finding
+- neither flag — no findings selected, command exits cleanly with a hint
+
+This is the real, working selection mechanism today. The Advisor's
+natural-language selection (`qsma chat`) is a stretch goal on top of this,
+not a replacement for it.
 
 ---
 
@@ -53,24 +76,32 @@
 |---|---|---|
 | [`src/qsma/__init__.py`](src/qsma/__init__.py) | Stub | Package marker. Empty. |
 | [`src/qsma/cli/__init__.py`](src/qsma/cli/__init__.py) | Stub | Package marker. Empty. |
-| [`src/qsma/cli/main.py`](src/qsma/cli/main.py) | ✅ Implemented | **CLI entry point.** Click group `cli` with 4 sub-commands: `scan(path, fmt, output)`, `report(path, findings)`, `migrate(path, finding_id, dry_run, auto, resume)`, `validate(path, timeout)`. All commands respond but delegate no logic yet — each prints a stub message. Uses `rich.console.Console` for output. |
+| [`src/qsma/cli/main.py`](src/qsma/cli/main.py) | ✅ Implemented | **CLI entry point.** Click group `cli` with 5 sub-commands: `scan(path, fmt, output)`, `report(path, findings, fmt)`, `migrate(path, finding_id, dry_run, auto, resume)`, `validate(path, timeout)`, `chat(...)` (placeholder). `scan`/`report`/`migrate`/`validate` call the real pipeline (Ingestion→Analyzer→Detector→Classifier→Reporter, and Agent for migrate/validate) — no mocked data. Uses `rich.console.Console`/`rich.table.Table` for output. |
 | [`src/qsma/utils/__init__.py`](src/qsma/utils/__init__.py) | Stub | Package marker. Empty. |
-| [`src/qsma/utils/models.py`](src/qsma/utils/models.py) | ✅ Implemented | **Canonical inter-module contracts (Pydantic).** Do NOT redefine these in individual modules. Contains: `QuantumRisk` enum, `Algorithm` enum (including post-quantum targets), `MigrationStatus` enum, `CodeLocation`, `CryptoHit`, `CryptoFinding` (dual risk scores + blast_radius), `DependencyNode`, `DependencyGraph`, `MigrationPlan`, `TransformationResult`, `ValidationResult`, `ScanReport`. **To add:** `MigrationSessionState`, `AdvisorSession`. |
-| [`src/qsma/utils/session.py`](src/qsma/utils/session.py) | 🔲 Stub | **Planned (Phase 2):** Redis session manager. Serialize/deserialize `MigrationSessionState`. `get_session(id)`, `save_session(state)`, `delete_session(id)`. Falls back to in-memory if Redis unavailable. |
+| [`src/qsma/utils/models.py`](src/qsma/utils/models.py) | ✅ Implemented | **Canonical inter-module contracts (Pydantic).** Do NOT redefine these in individual modules. Contains: `QuantumRisk` enum, `Algorithm` enum (including post-quantum targets), `MigrationStatus` enum, `CodeLocation` (incl. `snippet` — the actual source text for a finding, populated by the Classifier), `CryptoHit`, `CryptoFinding` (dual risk scores + blast_radius), `DependencyNode`, `DependencyGraph`, `MigrationPlan`, `TransformationResult`, `ValidationResult`, `ScanReport`, `MigrationExecutionPlan`, `FindingMeta`, `MigrationSessionState`. |
+| [`src/qsma/utils/session.py`](src/qsma/utils/session.py) | ⚠️ In-memory | `get_session(id)`/`save_session(state)`/`delete_session(id)` against a module-level `dict`. Same signatures as the planned Redis design — swapping in `RedisSaver` later is a drop-in change, not a rewrite. `--resume` works within a single process only. |
 | [`src/qsma/llm/__init__.py`](src/qsma/llm/__init__.py) | Stub | Package marker. Empty. |
-| [`src/qsma/llm/client.py`](src/qsma/llm/client.py) | ✅ Implemented | **Provider-agnostic LLM client.** Class `LLMClient`. Providers: `watsonx` (default), `openai_compatible`, `anthropic_compatible`, `mock`. Switch via `LLM_PROVIDER` env var. Called by LangGraph agent nodes — never called directly by pipeline modules. |
-| [`src/qsma/llm/training_data/`](src/qsma/llm/training_data/) | 🔲 Stub | **Planned (Phase 2):** Few-shot migration examples (`few_shot/*.json`) and agent system prompts (`prompts/*.txt`). One JSON file per algorithm-family migration pair. Loaded at agent startup. See ADR-009. |
-| [`src/qsma/agent/__init__.py`](src/qsma/agent/__init__.py) | 🔲 Stub | **Planned (Phase 2):** Package marker for LangGraph agent graph. |
-| [`src/qsma/agent/graph.py`](src/qsma/agent/graph.py) | 🔲 Stub | **Planned (Phase 2):** LangGraph `StateGraph` wiring `planner_node → migrator_node → validator_node`. Conditional edges for retry (≤3) and escalation. Redis checkpointer via `RedisSaver`. See ADR-007. |
-| [`src/qsma/ingestion/__init__.py`](src/qsma/ingestion/__init__.py) | 🔲 Stub | Empty. Planned: file walker, `CodebaseSnapshot`, `IngestionConfig`. Language detection by file extension. |
-| [`src/qsma/analyzer/__init__.py`](src/qsma/analyzer/__init__.py) | 🔲 Stub | Empty. Planned: **tree-sitter** multi-language AST parser (all languages) + libcst CST builder (Python only). Produces `AnalysisResult` with `ParsedFile` per source file. See ADR-006. |
-| [`src/qsma/detector/__init__.py`](src/qsma/detector/__init__.py) | 🔲 Stub | Empty. Planned: (A) tree-sitter query-based pattern matching → `list[CryptoHit]`; (B) build intra-codebase `DependencyGraph` and persist to Neo4j. See ADR-010. |
-| [`src/qsma/classifier/__init__.py`](src/qsma/classifier/__init__.py) | 🔲 Stub | Empty. Planned: dual risk scoring — `algorithm_risk_score` (deterministic NIST table, no LLM) + `migration_risk_score` (LLM-assisted, uses `DependencyGraph.blast_radius`). Produces `list[CryptoFinding]`. See ADR-011. |
-| [`src/qsma/advisor/__init__.py`](src/qsma/advisor/__init__.py) | 🔲 Stub | **NEW.** Planned (Phase 2): LLM-backed conversational REPL. Receives `list[CryptoFinding]` + `DependencyGraph`; user interacts in natural language; returns confirmed `list[finding_id]`. Entry point: `qsma chat`. See ADR-012. |
-| [`src/qsma/planner/__init__.py`](src/qsma/planner/__init__.py) | 🔲 Stub | Empty. Planned: **LangGraph node** `planner_node(state)`. Always calls LLM: produces `MigrationPlan` (target algorithm, dependency changes, transformation hints) from `CryptoFinding` + few-shot examples. NIST target table is prompt context, not hard-coded rules. Persists to Redis. |
-| [`src/qsma/migrator/__init__.py`](src/qsma/migrator/__init__.py) | 🔲 Stub | Empty. Planned: **LangGraph node** `migrator_node(state)`. Fully LLM-driven: builds prompt from `MigrationPlan` + code context + few-shot examples → calls `LLMClient` → splices result into source file via libcst patcher. Retries on Validator signal (max 3). Persists per-file result to Redis. |
-| [`src/qsma/validator/__init__.py`](src/qsma/validator/__init__.py) | 🔲 Stub | Empty. Planned: **LangGraph node** `validator_node(state)`. Syntax check + test run + LLM failure analysis. Routes: pass → Reporter, retry → migrator_node, escalate → MANUAL_REQUIRED. |
-| [`src/qsma/reporter/__init__.py`](src/qsma/reporter/__init__.py) | 🔲 Stub | Empty. Planned: CLI output formatter (text/JSON/markdown), consumes `ScanReport`. |
+| [`src/qsma/llm/client.py`](src/qsma/llm/client.py) | ✅ Implemented | **Provider-agnostic LLM client.** Class `LLMClient`. Providers: `watsonx` (default), `openai_compatible` (verified against real Groq — `openai/gpt-oss-120b`), `anthropic_compatible`, `mock`. Switch via `LLM_PROVIDER` env var. Called by Planner/Migrator/Validator nodes. |
+| [`src/qsma/llm/training_data/`](src/qsma/llm/training_data/) | ✅ Implemented | Few-shot migration examples (`few_shot/*.json` — RSA→ML-DSA, ECDSA→ML-DSA, ECDH→ML-KEM, AES-128→AES-256, MD5/SHA-1→SHA-256) and agent system prompts (`prompts/*.txt`). Loaded by Planner/Migrator via `_load_few_shot`. |
+| [`src/qsma/agent/__init__.py`](src/qsma/agent/__init__.py) | ✅ Implemented | Exports `build_graph`, `run_migration_session` from `graph.py`. |
+| [`src/qsma/agent/graph.py`](src/qsma/agent/graph.py) | ✅ Implemented | Real LangGraph `StateGraph` over `MigrationSessionState`: `planner`→`migrator`⇄`validator` (retry ≤3, escalate on failure) →`advance` to the next finding → `END`. In-memory checkpointer (no Redis — see above). Verified end-to-end with a real LLM against real open-source code. |
+| [`src/qsma/ingestion/__init__.py`](src/qsma/ingestion/__init__.py) | ✅ Implemented | Exports `collect_snapshot` from `walker.py`. |
+| [`src/qsma/ingestion/walker.py`](src/qsma/ingestion/walker.py) | ✅ Implemented | `collect_snapshot(path, config)` — recursive walk, `.gitignore`-aware (via `pathspec`), configurable exclude patterns/extensions, binary/size filtering, deterministic ordering → `CodebaseSnapshot`. |
+| [`src/qsma/analyzer/__init__.py`](src/qsma/analyzer/__init__.py) | ✅ Implemented | Exports `analyse_snapshot`, `parse_file` from `parser.py`. |
+| [`src/qsma/analyzer/parser.py`](src/qsma/analyzer/parser.py) | ✅ Implemented | tree-sitter (Python/Java/Go/C/Rust) + libcst (Python only). Real structural extraction (imports/functions/classes/calls) for **all 5 languages** — includes Java's `getInstance("ALGO")` factory-call argument capture and Go/Rust qualified-receiver call capture, needed to disambiguate JCA-style APIs. |
+| [`src/qsma/analyzer/languages.py`](src/qsma/analyzer/languages.py) | ✅ Implemented | tree-sitter `Language`/`Parser` singletons per language. |
+| [`src/qsma/analyzer/crypto_imports.py`](src/qsma/analyzer/crypto_imports.py) | ✅ Implemented | Per-language crypto-import allowlists (Python/Java/Go/C/Rust) — `is_crypto_import(module, language)`. |
+| [`src/qsma/detector/__init__.py`](src/qsma/detector/__init__.py) | ✅ Implemented | `detect(analysis, session_id, root_path)` → Phase A (`run_detection`) + Phase B (`build_dependency_graph`). |
+| [`src/qsma/detector/patterns/{rsa,ecc,symmetric,hashing}.py`](src/qsma/detector/patterns/) | ✅ Implemented | Per-algorithm `DetectionRule`s. Each file has both the original Python-specific rules and a `_match_<algo>_multilang` rule covering Java/Go/C/Rust (RSA/ECC key-gen/sign/exchange, AES/DES encryption, MD5/SHA-1/SHA-256 hashing). |
+| [`src/qsma/detector/graph.py`](src/qsma/detector/graph.py) | ✅ Implemented | `build_dependency_graph` — per-file `DependencyNode`s, direct/transitive dependents via BFS, `has_crypto` tagging, optional Neo4j persistence (in-memory always works). |
+| [`src/qsma/classifier/__init__.py`](src/qsma/classifier/__init__.py) | ✅ Implemented | `classify(hits, graph, llm=None)` → `list[CryptoFinding]`. `ALGORITHM_RISK_TABLE` (deterministic, no LLM) + heuristic/LLM-assisted `migration_risk_score` (blast_radius + usage_type weighted; heuristic is always the fallback). Also reads the real source snippet for each finding's `CodeLocation.snippet` — the only place in the pipeline that does, which Planner/Migrator both depend on. |
+| [`src/qsma/advisor/__init__.py`](src/qsma/advisor/__init__.py) | 🔲 Stub — deferred | Out of scope for this submission (see "Current state on `main`" above). `qsma chat` remains a placeholder. |
+| [`src/qsma/planner/__init__.py`](src/qsma/planner/__init__.py) | ✅ Implemented | `planner_node(state)` — LLM call per finding → `MigrationPlan`, topo-sorted + wave-packed into `MigrationExecutionPlan`. `_NIST_TARGETS` covers RSA/ECDSA/DSA/DH/ECDH/AES-128/DES/3DES/MD5/SHA-1. |
+| [`src/qsma/migrator/__init__.py`](src/qsma/migrator/__init__.py) | ✅ Implemented | `migrator_node(state)` — LLM transform via `llm_transform.py`, patched into the source file via `patcher.py`. Builds `ValidatorState` for the Validator (`build_validator_state`). |
+| [`src/qsma/migrator/llm_transform.py`](src/qsma/migrator/llm_transform.py) | ✅ Implemented | Prompt builder + response parser. Re-indents the LLM's reply to match the original snippet's indentation (single-line originals are flattened to one level; multi-line originals keep the model's relative nesting) — Python is indentation-sensitive and the model reliably dedents "return only the code" replies. |
+| [`src/qsma/migrator/patcher.py`](src/qsma/migrator/patcher.py) | ✅ Implemented | libcst-based line-range splice, atomic write, dry-run diff mode, syntax-validates the patched result before writing. |
+| [`src/qsma/validator/node.py`](src/qsma/validator/node.py) | ✅ Implemented | `validator_node(state)` — syntax check (`ast.parse`) + `pytest` run + LLM-generated retry hints on failure. Routes pass/retry/escalate via the returned dict's `retry_hints`/`validation_results`. |
+| [`src/qsma/reporter/__init__.py`](src/qsma/reporter/__init__.py) | ✅ Implemented | `build_scan_report`, `finding_rows`, `format_text`/`format_json`/`format_markdown`. Owns all findings sorting/aggregation — CLI only renders. |
 
 ### Tests
 
@@ -84,6 +115,18 @@
 | [`tests/fixtures/sample_projects/python_rsa/crypto_utils.py`](tests/fixtures/sample_projects/python_rsa/crypto_utils.py) | Sample project: RSA key generation and signing using `cryptography` library. Used as a detection test target. |
 | [`tests/fixtures/sample_projects/python_ecdh/key_exchange.py`](tests/fixtures/sample_projects/python_ecdh/key_exchange.py) | Sample project: ECDH key exchange using `cryptography` library. Used as a detection test target. |
 | [`tests/fixtures/sample_projects/python_aes/encryption.py`](tests/fixtures/sample_projects/python_aes/encryption.py) | Sample project: AES-128 encryption. Used as a detection test target. |
+| [`tests/fixtures/sample_projects/python_aes_ecb/aes_ecb.py`](tests/fixtures/sample_projects/python_aes_ecb/aes_ecb.py) | Sample project: AES in ECB mode. |
+| [`tests/fixtures/sample_projects/python_hashing/hash_utils.py`](tests/fixtures/sample_projects/python_hashing/hash_utils.py) | Sample project: MD5/SHA-1 hashing. |
+| [`tests/unit/test_classifier.py`](tests/unit/test_classifier.py) | Classifier: risk table, severity formula, QuantumRisk bucketing, heuristic/LLM migration-risk scoring, `classify()` end-to-end. |
+| [`tests/unit/test_reporter.py`](tests/unit/test_reporter.py) | Reporter: `build_scan_report` aggregation/sorting, all three output formats, JSON round-trip. |
+| [`tests/unit/test_agent_graph.py`](tests/unit/test_agent_graph.py) | Agent: happy path, escalation on an invalid transform, no-findings, multi-finding processing — all via `LLMClient(provider="mock")`. |
+| [`tests/unit/test_llm_transform.py`](tests/unit/test_llm_transform.py) | Migrator: the reindent-to-match logic (single-line flatten vs. multi-line relative nesting), added after a real end-to-end test against PyJWT surfaced the indentation bug. |
+| [`tests/unit/test_detector_multilang.py`](tests/unit/test_detector_multilang.py) | Detector: RSA/AES/hashing detection for Java, Go, C, and Rust synthetic snippets. |
+| [`tests/unit/test_cli.py`](tests/unit/test_cli.py) | CLI: `scan`/`report`/`migrate`/`validate` against a real fixture via Click's `CliRunner`, `LLM_PROVIDER=mock`. |
+
+**196/196 tests pass** (`pytest tests/ -q`). Also verified against **real open-source
+codebases with a real LLM** (not a fixture, not mocked): PyJWT (RSA→ML-DSA) and
+python-jose (SHA-1→SHA-256, validated clean against python-jose's own 458-test suite).
 
 ### Bob sessions (screenshots)
 
@@ -98,7 +141,8 @@
 
 ## Current pipeline architecture
 
-The agreed end-to-end pipeline. All stages exist as empty stubs except CLI, models, and LLM client.
+The agreed end-to-end pipeline — now real and working end-to-end (Advisor and
+Redis are the two exceptions; see "Current state on `main`" above).
 
 ```
 User
@@ -237,8 +281,8 @@ Inter-module data contracts (all defined in src/qsma/utils/models.py):
 - **tree-sitter** (primary parser) for multi-language AST in Analyzer + Detector — 40+ languages, single query API
 - **libcst** (Python-only, Migrator only) for lossless CST roundtrip — preserves comments and formatting
 - **LangGraph ≥ 0.2** for agentic Planner → Migrator → Validator loop with typed state and retry
-- **Redis** for session state persistence — mid-run resume via `--resume <session_id>`
-- **Neo4j** for intra-codebase dependency graph — `IMPORTS_FROM`/`CALLS` edges; blast-radius queries by Classifier + Planner (optional; in-memory fallback) — see ADR-010
+- **Redis** for session state persistence — mid-run resume via `--resume <session_id>` (planned; an in-memory store with the same interface is used today — see `utils/session.py` above)
+- **Neo4j** for intra-codebase dependency graph — `IMPORTS_FROM`/`CALLS` edges; blast-radius queries by Classifier + Planner (optional — in-memory dependency graph is what's actually used; Neo4j persistence is a no-op unless `NEO4J_URI` is set) — see ADR-010
 - **IBM watsonx.ai** as default LLM (Granite Code model) — switch via `.env` only
 - **Pydantic v2** for all inter-module data models including `MigrationSessionState`, `DependencyGraph`, `CryptoHit`
 - **Click + Rich** for CLI — thin layer, no business logic in CLI module
@@ -255,8 +299,12 @@ and update the branch row to `synced to main`.
 
 | Branch | Phase | Ahead of main | Currently implementing | Notes |
 |---|---|---|---|---|
-| `main` | 0 | — | nothing (foundation complete) | CLI stub, models, LLM client, test fixtures |
-| `changes-Maruti` | 1→2 | +planner+migrator | — | `MigrationSessionState` added to models.py; `planner/__init__.py` (planner_node, run_planner); `migrator/__init__.py` (migrator_node, run_migrator); `migrator/patcher.py` (apply_patch); `migrator/llm_transform.py` (build_transform_messages, call_llm_transform); planner/migrator system prompts written; unit tests: test_planner.py, test_migrator.py |
-| `changes-Samik` | 0 | synced | nothing yet | — |
+| `main` | 2 | — | — | Full pipeline real end-to-end: Ingestion, Analyzer, Detector (incl. multilingual), Classifier, Reporter, Agent (LangGraph), CLI wiring. See file index above. |
+| `changes-Maruti` | 2 | synced | — | planner/migrator (original work) now merged to `main`, plus this session's Classifier, Reporter, Agent, CLI wiring, multilingual Detector rules, and the reindent/snippet/few-shot fixes found via real end-to-end testing. |
+| `changes-Samik` | 2 | synced | — | Ingestion (`walker.py`), Analyzer (`parser.py`, tree-sitter multi-language), Detector (`patterns/`, `graph.py`) — merged to `main` via `401f054`. |
 | `changes-Navya` | 0 | synced | nothing yet | — |
-| `changes-Palak` | 0 | synced | nothing yet | — |
+| `changes-Palak` | 0 | synced | nothing yet | CLI scaffold and Validator (`validator/node.py`) — merged to `main` prior to this session. |
+
+**Not yet synced to `main` as of this update:** `changes-Navya`, `changes-Palak` local
+branches may be behind — run `git merge main` on each before further work (see the
+git commands used to bring `main` up to date after this session's changes).

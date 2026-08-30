@@ -2,5 +2,11 @@
   "algorithm": "ECDH",
   "target_algorithm": "ML-KEM",
   "nist_standard": "FIPS 203 (ML-KEM / Kyber)",
-  "examples": []
+  "examples": [
+    {
+      "input": "private_key = generate_private_key(SECP256R1())\npeer_public_key = private_key.public_key()\nshared_key = private_key.exchange(ECDH(), peer_public_key)",
+      "output": "# QSMA: requires pqcrypto\nfrom pqcrypto.kem.kyber512 import generate_keypair, encrypt, decrypt\npublic_key, private_key = generate_keypair()\nciphertext, shared_key = encrypt(public_key)\n# The peer decapsulates with: shared_key = decrypt(private_key, ciphertext)",
+      "note": "ECDH is a symmetric key-agreement protocol (both sides derive the same shared_key from an exchange); ML-KEM is asymmetric key encapsulation — one side encrypts to produce (ciphertext, shared_key), the other decrypts the ciphertext with its private key to recover the same shared_key. The calling code's control flow needs restructuring, not just a drop-in call swap, which is flagged in the comment."
+    }
+  ]
 }

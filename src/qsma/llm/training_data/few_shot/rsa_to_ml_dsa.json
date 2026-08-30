@@ -2,5 +2,21 @@
   "algorithm": "RSA",
   "target_algorithm": "ML-DSA",
   "nist_standard": "FIPS 204 (ML-DSA / Dilithium)",
-  "examples": []
+  "examples": [
+    {
+      "input": "private_key = rsa.generate_private_key(\n    public_exponent=65537,\n    key_size=2048,\n)",
+      "output": "# QSMA: requires pqcrypto\nfrom pqcrypto.sign.dilithium2 import generate_keypair\npublic_key, private_key = generate_keypair()",
+      "note": "RSA key generation replaced with ML-DSA (Dilithium2) key generation. pqcrypto returns a (public_key, secret_key) pair directly instead of a key object with .public_key()."
+    },
+    {
+      "input": "signature: bytes = key.sign(msg, padding.PKCS1v15(), self.hash_alg())",
+      "output": "# QSMA: requires pqcrypto\nfrom pqcrypto.sign.dilithium2 import sign\nsignature: bytes = sign(key, msg)",
+      "note": "RSA-PKCS1v15 signing has no separate padding/hash scheme in ML-DSA — the padding and hash_alg arguments are dropped because Dilithium's signing already incorporates message hashing internally."
+    },
+    {
+      "input": "try:\n    key.verify(sig, msg, padding.PKCS1v15(), self.hash_alg())\n    return True\nexcept InvalidSignature:\n    return False",
+      "output": "# QSMA: requires pqcrypto\nfrom pqcrypto.sign.dilithium2 import verify\ntry:\n    verify(key, msg, sig)\n    return True\nexcept Exception:\n    return False",
+      "note": "RSA verify raises cryptography.exceptions.InvalidSignature; pqcrypto's verify raises a generic exception on failure, so the except clause is broadened rather than importing an RSA-specific exception type."
+    }
+  ]
 }

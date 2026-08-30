@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import textwrap
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +45,8 @@ def _load_few_shot(plan: MigrationPlan) -> list[dict[str, Any]]:
         "ECDSA": "ecdsa_to_ml_dsa",
         "ECDH": "ecdh_to_ml_kem",
         "AES-128": "aes128_to_aes256",
+        "MD5": "legacy_hash_to_sha256",
+        "SHA-1": "legacy_hash_to_sha256",
     }
     hints = plan.transformation_hints
     src_alg = hints.get("source_algorithm", "")
@@ -55,7 +58,8 @@ def _load_few_shot(plan: MigrationPlan) -> list[dict[str, Any]]:
         return []
     try:
         data = json.loads(few_shot_path.read_text(encoding="utf-8"))
-        return data.get("examples", [])
+        examples: list[dict[str, Any]] = data.get("examples", [])
+        return examples
     except Exception:
         return []
 
@@ -101,7 +105,8 @@ def build_transform_messages(
         f"{few_shot_block}"
         f"{retry_block}"
         f"\n\nOriginal code to transform:\n{original_snippet}\n\n"
-        "Return ONLY the transformed Python code."
+        "Return ONLY the transformed Python code, preserving the exact "
+        "leading indentation of the original snippet on every line."
     )
 
     return [
@@ -138,7 +143,55 @@ def call_llm_transform(
     if response.startswith(_MANUAL_REQUIRED_MARKER):
         return False, response
 
+    # The model is asked to "return only the code," which in practice means
+    # it echoes the snippet dedented to column 0 — but patcher.apply_patch
+    # splices the response verbatim into the original line range, so losing
+    # the original indentation produces a syntax error (e.g. an unindented
+    # statement right after a `def ...:`). Re-apply the original snippet's
+    # leading indentation to every non-blank line of the response.
+    response = _reindent_to_match(response, original_snippet)
+
     return True, response
+
+
+def _reindent_to_match(transformed: str, original_snippet: str) -> str:
+    """
+    Re-apply original_snippet's leading indentation to transformed.
+
+    The model's own indentation is unreliable — sometimes it dedents
+    everything to column 0, sometimes it emits inconsistent indentation
+    across a multi-line reply. Dedent first (using the block's own minimum
+    common indentation, not just the first line) so a uniform target indent
+    can be applied cleanly, rather than stacking on top of whatever the
+    model already emitted.
+    """
+    if not original_snippet:
+        return transformed
+    original_lines = original_snippet.splitlines()
+    first_line = original_lines[0] if original_lines else ""
+    target_indent = first_line[: len(first_line) - len(first_line.lstrip())]
+    if not target_indent:
+        return transformed
+
+    if len(original_lines) == 1:
+        # Every detector rule currently flags a single line — the model
+        # frequently invents inconsistent per-line indentation when it
+        # expands one statement into several (e.g. adding an import), so
+        # flatten to one uniform level rather than trusting its relative
+        # indentation, which is not meaningful here (there is no original
+        # multi-line structure to preserve).
+        return "\n".join(
+            target_indent + line.strip() if line.strip() else line
+            for line in transformed.splitlines()
+        )
+
+    # Multi-line original: dedent the model's block to its own minimum
+    # common indentation, then re-apply the target base indent, preserving
+    # whatever relative nesting the model produced internally.
+    dedented = textwrap.dedent(transformed)
+    return "\n".join(
+        target_indent + line if line.strip() else line for line in dedented.splitlines()
+    )
 
 
 # ---------------------------------------------------------------------------

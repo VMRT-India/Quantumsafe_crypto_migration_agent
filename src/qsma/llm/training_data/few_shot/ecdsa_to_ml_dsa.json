@@ -2,5 +2,16 @@
   "algorithm": "ECDSA",
   "target_algorithm": "ML-DSA",
   "nist_standard": "FIPS 204 (ML-DSA / Dilithium)",
-  "examples": []
+  "examples": [
+    {
+      "input": "private_key = ec.generate_private_key(ec.SECP256R1())",
+      "output": "# QSMA: requires pqcrypto\nfrom pqcrypto.sign.dilithium2 import generate_keypair\npublic_key, private_key = generate_keypair()",
+      "note": "ECDSA key generation over a named curve replaced with ML-DSA (Dilithium2) key generation — no curve parameter is needed since Dilithium is lattice-based, not curve-based."
+    },
+    {
+      "input": "der_sig = key.sign(msg, ECDSA(self.hash_alg()))\nreturn der_to_raw_signature(der_sig, key.curve)",
+      "output": "# QSMA: requires pqcrypto\nfrom pqcrypto.sign.dilithium2 import sign\nsignature = sign(key, msg)\nreturn signature",
+      "note": "ML-DSA signatures are a fixed-size byte string, not a DER-encoded ECDSA signature, so the der_to_raw_signature conversion step is removed entirely."
+    }
+  ]
 }

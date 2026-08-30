@@ -119,4 +119,10 @@ tests/samples/real_*
 # qsma scan cache — generated at runtime, never committed
 .qsma_cache/
 
+# Local AI-assistant tooling state — never committed
+.claude/
+.claude.json
+.cursor/
+.aider*
+
 # bob_sessions/ — session screenshots, always committed (required for hackathon submission)

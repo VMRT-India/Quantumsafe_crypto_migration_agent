@@ -11,21 +11,26 @@ post-quantum standards using a LangGraph agentic loop backed by IBM watsonx.ai.
 ## What it does
 
 ```
-qsma scan <path>               →  detect crypto findings, build dependency graph, dual risk scores
-qsma chat <path>               →  talk to the AI advisor in natural language about findings ★ NEW ★
-qsma migrate <path>            →  apply LLM-agentic quantum-safe migrations
-qsma migrate --resume <id>     →  resume an interrupted migration from Redis session state
-qsma validate <path>           →  validate migrated code builds and tests still pass
-qsma report <path>             →  display a structured findings report
+qsma scan <path>                          →  detect crypto findings, build dependency graph, dual risk scores
+qsma migrate <path> --finding-id ID       →  migrate specific finding(s) by ID
+qsma migrate <path> --auto                →  auto-select every CRITICAL/HIGH finding and migrate
+qsma migrate <path> --resume <id>         →  resume an interrupted migration session
+qsma validate <path>                      →  validate migrated code: syntax check + test run
+qsma report <path> [--findings file.json] →  display a structured findings report
+qsma chat <path>                          →  (placeholder — natural-language advisor, not yet implemented)
 ```
 
-**Full workflow:**
+**Working end-to-end today:**
 
 ```
 Scan → Detect → Build dependency graph → Dual-score classify
-  → Chat with AI advisor (natural language) → Confirm selection
-    → Migrate (Planner→Migrator→Validator agents) → Validate → Report
+  → Select findings (--finding-id / --auto) → Migrate (Planner→Migrator→Validator agents,
+    real LangGraph loop with retry/escalation) → Validate → Report
 ```
+
+Verified against real open-source codebases (not just the bundled fixtures) with a
+real LLM — see `bob_sessions/` for the demo walkthrough. `qsma chat` (natural-language
+finding selection) is a stretch goal, not required for the flow above.
 
 ---
 
@@ -45,7 +50,9 @@ pip install -e ".[dev]"
 
 # 4. Configure environment (NEVER commit .env)
 cp .env.example .env
-# Edit .env with your IBM watsonx.ai credentials
+# Edit .env with your LLM credentials — watsonx.ai is the default provider,
+# but any openai_compatible endpoint works too (verified against Groq:
+# set LLM_PROVIDER=openai_compatible, LLM_BASE_URL, LLM_API_KEY, LLM_MODEL).
 
 # 5. Install pre-commit hooks (security requirement)
 pre-commit install
@@ -116,7 +123,7 @@ src/qsma/
 ├── analyzer/              — tree-sitter (all languages) + libcst CST builder (Python only)
 ├── detector/              — tree-sitter pattern-matching for crypto + DependencyGraph builder (Neo4j)
 ├── classifier/            — Dual risk scoring: algorithm_risk (NIST table) + migration_risk (LLM-assisted)
-├── advisor/               — NEW: conversational LLM agent (qsma chat); natural-language finding selection
+├── advisor/               — placeholder (qsma chat); natural-language finding selection is a stretch goal
 ├── planner/               — LangGraph agent node: LLM reasons migration strategy per finding
 ├── migrator/              — LangGraph agent node: LLM generates transformed code; libcst splices it in
 ├── validator/             — LangGraph agent node: syntax/test check + LLM failure analysis + retry signal
@@ -127,7 +134,7 @@ src/qsma/
 │   └── training_data/     — Few-shot migration examples + agent system prompts (JSON/txt)
 └── utils/
     ├── models.py          — Shared Pydantic contracts (CryptoFinding, MigrationSessionState, …)
-    └── session.py         — Redis session manager (MigrationSessionState persistence + resume)
+    └── session.py         — session store (MigrationSessionState persistence + resume); in-memory today, same interface Redis will use
 
 tests/
 ├── unit/         — Per-module unit tests

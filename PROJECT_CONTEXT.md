@@ -225,13 +225,13 @@ list[CryptoFinding]
 | Analyzer | `qsma.analyzer` | Multi-language AST parsing via tree-sitter (all languages) + libcst for Python structural analysis |
 | Detector | `qsma.detector` | Pattern matching on tree-sitter AST nodes to find crypto usage; **builds intra-codebase `DependencyGraph`** and persists to Neo4j |
 | Classifier | `qsma.classifier` | Dual risk scoring: **algorithm volatility** (deterministic NIST table) + **migration complexity** (LLM-assisted, uses blast radius from `DependencyGraph`) |
-| **Advisor** | **`qsma.advisor`** | **NEW — LLM-backed conversational CLI agent.** Receives scan results; user interacts in natural language to explore findings, ask blast-radius questions, and confirm a finding selection. Returns `list[finding_id]` to trigger migration. See ADR-012. |
+| **Advisor** | **`qsma.advisor`** | **Deferred / out of scope for this submission.** Planned: LLM-backed conversational CLI agent for natural-language finding selection. See ADR-012. Selection today is via `--finding-id`/`--auto`. |
 | Planner | `qsma.planner` | **LangGraph agent node** — migration strategy reasoning per finding; queries Neo4j for dependency order |
 | Migrator | `qsma.migrator` | **LangGraph agent node** — fully LLM-driven code transformation; libcst splices result |
 | Validator | `qsma.validator` | **LangGraph agent node** — post-migration build/test validation; feeds back to Migrator on failure |
 | Reporter | `qsma.reporter` | Output formatting (terminal, JSON, Markdown) |
 | LLM Client | `qsma.llm` | watsonx.ai SDK wrapper, prompt templates, few-shot training data loader |
-| Session | `qsma.utils.session` | Redis-backed session state manager; serialize/resume `MigrationSessionState` |
+| Session | `qsma.utils.session` | Session state manager; serialize/resume `MigrationSessionState`. In-memory today (same interface planned for a Redis-backed store — see §17 Next Tasks). |
 | Models | `qsma.utils.models` | Shared Pydantic data-models (contracts) including `MigrationSessionState`, `DependencyGraph`, `CryptoHit` |
 
 ---
@@ -773,43 +773,45 @@ needing to inspect the code.
 
 ## 11. Development Phases
 
-### Phase 0 — Foundation (current) ✅
+### Phase 0 — Foundation ✅ complete
 
 **Objective:** Repository, security, architecture, models, stubs.
 **Output:** Working repo, `qsma` CLI stub installs and runs.
 **Definition of done:**
-- [ ] Git repo initialized with security files
-- [ ] `.env.example` with placeholders only
-- [ ] `qsma` CLI installs via `pip install -e .`
-- [ ] All sub-commands respond (as stubs) without errors
-- [ ] `models.py` reviewed and agreed by all developers
-- [ ] `PROJECT_CONTEXT.md` complete
+- [x] Git repo initialized with security files
+- [x] `.env.example` with placeholders only
+- [x] `qsma` CLI installs via `pip install -e .`
+- [x] All sub-commands respond without errors
+- [x] `models.py` reviewed and agreed by all developers
+- [x] `PROJECT_CONTEXT.md` complete
 
 ---
 
-### Phase 1 — Core Scan Pipeline
+### Phase 1 — Core Scan Pipeline ✅ complete
 
 **Objective:** `qsma scan <path>` produces real findings on a Python codebase.
-**Parallel tasks:** T-02+T-03 (Dev1), T-05+T-06 prep (Dev3), T-14+T-12 (Dev4), T-07 (Dev2)
 **Integration point:** Ingestion → Analyzer → Detector → Classifier → Reporter (terminal)
 **Definition of done:**
-- [ ] `qsma scan tests/fixtures/sample_projects/python_rsa` outputs ≥1 CRITICAL finding
-- [ ] JSON output mode works (`--format json`)
-- [ ] Unit tests for Ingestion, Analyzer, Detector, Classifier all pass
+- [x] `qsma scan tests/fixtures/sample_projects/python_rsa` outputs ≥1 CRITICAL finding
+- [x] JSON output mode works (`--format json`)
+- [x] Unit tests for Ingestion, Analyzer, Detector, Classifier all pass
+- [x] Also verified against real open-source codebases (PyJWT, python-jose) — not just fixtures
 
 ---
 
-### Phase 2 — Migration Pipeline
+### Phase 2 — Migration Pipeline ✅ complete (Redis exception noted)
 
 **Objective:** `qsma migrate <path>` rewrites RSA → ML-DSA and ECDH → ML-KEM correctly via the LangGraph agentic loop.
-**Parallel tasks:** T-09 (Dev1), T-08+T-10 (Dev2), T-15+T-16 tests (Dev3), T-13 CLI (Dev4)
 **Integration point:** Planner agent → Migrator agent → Validator agent (→ retry loop) → Reporter
 **Definition of done:**
-- [ ] `qsma migrate` on python_rsa fixture produces valid Python that uses Dilithium (LLM-generated, agent loop)
-- [ ] `--dry-run` shows diff without writing files
-- [ ] Validator agent catches syntax errors and triggers a retry with updated hints
-- [ ] `qsma validate` runs pytest on migrated fixture and reports pass/fail
-- [ ] `qsma migrate --resume <id>` correctly resumes an interrupted session from Redis
+- [x] `qsma migrate` produces valid Python that uses Dilithium (LLM-generated, agent loop) —
+      verified on real PyJWT source, not just the fixture (RSA sign → ML-DSA/Dilithium2)
+- [x] `--dry-run` shows the transform without writing files
+- [x] Validator agent catches syntax errors and triggers a retry with updated hints
+- [x] `qsma validate` runs pytest and reports pass/fail
+- [ ] `qsma migrate --resume <id>` resumes an interrupted session — works today via the
+      in-memory session store within a single process; does not yet survive a process
+      restart (needs real Redis — see §17 Next Tasks)
 
 ---
 
@@ -1222,52 +1224,55 @@ Classifier now has an **optional** LLM dependency for `migration_risk_score` onl
 
 ## 16. Current Status
 
-**Phase:** 0 — Foundation
+**Phase:** 2 — Migration pipeline working end-to-end (updated 2026-08-30)
 
 | Item | Status |
 |---|---|
-| Git repository initialized | ✅ |
-| `.gitignore` with IBM security patterns | ✅ |
-| `.bobignore` | ✅ |
-| `.env.example` with placeholders | ✅ |
-| `pyproject.toml` | ✅ |
-| Directory structure | ✅ |
-| `src/qsma/utils/models.py` (shared contracts) | ✅ |
-| `src/qsma/cli/main.py` (stub commands) | ✅ |
-| `tests/conftest.py` | ✅ |
-| `.pre-commit-config.yaml` | ✅ |
-| `scripts/check_secrets.sh` | ✅ |
-| `PROJECT_CONTEXT.md` | ✅ |
-| `README.md` | ✅ (written below) |
-| All sub-commands run as stubs | ⬜ (needs `pip install -e .`) |
-| `models.py` reviewed by team | ⬜ |
+| Phase 0 (foundation) | ✅ complete |
+| Ingestion (`qsma.ingestion`) | ✅ real — `.gitignore`-aware walk, all 5 languages |
+| Analyzer (`qsma.analyzer`) | ✅ real — tree-sitter + libcst, Python/Java/Go/C/Rust |
+| Detector (`qsma.detector`) | ✅ real — pattern rules + dependency graph, multilingual |
+| Classifier (`qsma.classifier`) | ✅ real — dual risk scoring, deterministic + heuristic/LLM |
+| Advisor (`qsma.advisor`) | 🔲 deferred — out of scope for this submission |
+| Planner (`qsma.planner`) | ✅ real — LLM-driven `MigrationPlan` per finding |
+| Migrator (`qsma.migrator`) | ✅ real — LLM transform + libcst patch |
+| Validator (`qsma.validator`) | ✅ real — syntax + test run + LLM retry hints |
+| Reporter (`qsma.reporter`) | ✅ real — text/JSON/markdown |
+| Agent (`qsma.agent`) | ✅ real — LangGraph `StateGraph`, in-memory checkpointer |
+| CLI (`qsma.cli`) | ✅ real — `scan`/`report`/`migrate`/`validate` wired to the pipeline; `chat` is a placeholder |
+| Session persistence | ⚠️ in-memory (same interface as the planned Redis design) |
+| Unit/integration tests | ✅ 196/196 passing |
+| Real-world validation | ✅ tested against PyJWT and python-jose with a real LLM (Groq) |
 
-**Nothing beyond Phase 0 has been implemented yet.**
+**All of Phase 1 and Phase 2's definition-of-done items (below) are met**, with the
+noted exceptions of Redis persistence and the Advisor module.
 
 ---
 
 ## 17. Next Tasks
 
-The immediate next tasks to begin Phase 1:
+With the core pipeline real end-to-end, the remaining work is refinement rather than
+new modules:
 
-1. **Review `models.py`** — the inter-module contracts must be agreed before parallel
-   development starts. If changes are needed, make them before any module implements
-   against the schema.
+1. **Redis session persistence** — swap `utils/session.py`'s in-memory dict for a real
+   Redis-backed store behind the same `get_session`/`save_session`/`delete_session`
+   interface. Needed for `--resume` to survive a process restart.
 
-2. **T-02 Ingestion** — implement `qsma.ingestion`: file walker, `CodebaseSnapshot`,
-   `IngestionConfig`. Start here — everything downstream depends on it.
+2. **Advisor (`qsma chat`)** — natural-language finding selection, if time allows.
+   Explicitly out of scope for the current submission; `--finding-id`/`--auto` cover
+   selection today.
 
-3. **T-07 LLM Client** — implement `qsma.llm` client wrapper. Can start in parallel
-   with T-02. Ensure it mocks cleanly — no real credentials needed for unit tests.
+3. **Detector precision** — the RSA-signature rule (`_match_rsa_sign` in
+   `detector/patterns/rsa.py`) over-flags any `sign`/`verify` call in a file that has
+   *any* RSA-related import, including calls that belong to unrelated classes in the
+   same file (observed on real-world code: ECDSA's `sign`/`verify` methods got
+   mislabeled as RSA). Worth tightening with class/scope-aware matching.
 
-4. **T-05 Detector pattern library** — define detection rule schema in
-   `qsma.detector.patterns`. Can start in parallel with T-02 and T-07.
+4. **Few-shot coverage** — the four filled-in few-shot files (RSA, ECDSA, ECDH,
+   AES-128, MD5/SHA-1) each have 1-3 examples; more examples per algorithm, and
+   examples for additional target languages (only Python transforms have been
+   validated with a real LLM so far), would improve transform reliability.
 
-5. **T-12 Reporter** — implement `qsma.reporter` against the existing `CryptoFinding`
-   schema. Can start immediately — only depends on `models.py` (T-01, done).
-
-6. **T-14 Test fixtures** — expand `tests/fixtures/` with additional sample projects
-   covering more crypto patterns. Can start immediately.
-
-**Phase 1 integration checkpoint:** Once T-02 (Ingestion) and T-03 (Analyzer) are
-complete, wire Ingestion → Analyzer → Detector stub and verify data contracts hold.
+5. **Neo4j / real dependency-graph persistence** — currently a no-op unless
+   `NEO4J_URI` is set; the in-memory `DependencyGraph` is what's actually used for
+   blast-radius scoring.

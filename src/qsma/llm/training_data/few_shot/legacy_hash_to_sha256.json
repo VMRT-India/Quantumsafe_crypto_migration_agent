@@ -1,0 +1,17 @@
+{
+  "algorithm": "MD5/SHA-1",
+  "target_algorithm": "SHA-256",
+  "nist_standard": "FIPS 180-4",
+  "examples": [
+    {
+      "input": "digest = hashlib.md5(data).hexdigest()",
+      "output": "digest = hashlib.sha256(data).hexdigest()",
+      "note": "hashlib exposes SHA-256 with an identical call shape to MD5 — this is a drop-in replacement, no new library needed. Note: MD5/SHA-1 are not a post-quantum concern (Grover's algorithm only halves effective hash strength, and SHA-256's 256-bit output is already comfortably above the quantum security threshold) — they are replaced here because they are classically broken/deprecated, not because of quantum risk."
+    },
+    {
+      "input": "RSA_OAEP = padding.OAEP(padding.MGF1(hashes.SHA1()), hashes.SHA1(), None)",
+      "output": "RSA_OAEP = padding.OAEP(padding.MGF1(hashes.SHA256()), hashes.SHA256(), None)",
+      "note": "Both the MGF1 mask-generation hash and the OAEP digest hash are upgraded together — do not delete or comment out the constant; a same-shape replacement using an already-imported hashes.SHA256 is available in this file (see the SHA256 class attribute above)."
+    }
+  ]
+}
